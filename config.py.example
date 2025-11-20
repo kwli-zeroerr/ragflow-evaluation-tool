@@ -16,3 +16,32 @@ TEST_API_KEY = "your-test-api-key"
 # 默认使用哪个环境
 DEFAULT_ENV = "test"  # 可选: "prod" 或 "test"
 
+# 并发配置
+# 并发线程数，设置为1表示顺序执行（单线程），大于1表示并发执行
+# 建议值：根据API服务器的处理能力和限流策略设置，通常设置为 3-10
+# 注意：并发数过高可能导致API限流或服务器压力过大
+MAX_WORKERS = 1  # 默认值：1（顺序执行）
+
+# 每个请求之间的延迟（秒），用于避免API限流
+# 在并发模式下，每个线程会独立应用此延迟
+# 建议值：0.1-1.0 秒，根据API限流策略调整
+DELAY_BETWEEN_REQUESTS = 0.5  # 默认值：0.5 秒
+
+# ========== A/B测试配置 ==========
+# 是否启用A/B测试
+# True: 运行A/B测试（对比两种配置方案）
+# False: 只运行单次评测（使用下面的RETRIEVAL_CONFIG配置）
+ENABLE_AB_TEST = False  # 默认值：False（单次评测）
+
+# ========== 单次评测配置（当ENABLE_AB_TEST=False时使用）==========
+# 检索参数配置
+RETRIEVAL_CONFIG = {
+    "top_k": 1024,  # API默认值
+    "similarity_threshold": 0.2,  # API默认值
+    "vector_similarity_weight": 0.3,  # 向量相似度权重
+    "rerank_id": "",  # API默认值
+    "highlight": False,  # API默认值
+    "page": 1,  # API默认值
+    "page_size": 30  # API默认值
+}
+

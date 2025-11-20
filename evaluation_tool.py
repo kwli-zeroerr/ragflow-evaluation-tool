@@ -15,6 +15,8 @@ import logging
 from datetime import datetime
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 
 # 创建统一的输入和输出目录
 input_dir = Path("input")
@@ -764,6 +766,9 @@ class EvaluationRunner:
         # 创建API响应保存目录
         self.api_responses_dir = output_dir / "api_responses"
         self.api_responses_dir.mkdir(exist_ok=True)
+        # 线程安全锁
+        self.results_lock = Lock()
+        self.logger_lock = Lock()
     
     def load_test_set(self, test_set_path: str) -> List[TestCase]:
         """从Excel文件加载测试集"""
@@ -861,6 +866,7 @@ class EvaluationRunner:
         if "error" in response:
             logger.warning(f"API返回错误: {response.get('error')}")
             return {
+                "test_index": test_index,
                 "question": test_case.question,
                 "answer": test_case.answer,
                 "reference": test_case.reference,
@@ -1065,6 +1071,7 @@ class EvaluationRunner:
         logger.info(f"Recall@10: {'是' if recall_at_10 == 1.0 else '否'}, Top10章节: {', '.join(top10_chapters) if top10_chapters else '无'}")
         
         metrics = {
+            "test_index": test_index,  # 保存测试索引，用于排序
             "question": test_case.question,
             # 将最终选择的章节作为 answer，便于在 HTML 中展示（RAG返回的第一个结果）
             "answer": final_chapter if final_chapter else "",
@@ -1123,42 +1130,136 @@ class EvaluationRunner:
         except Exception as e:
             logger.error(f"保存异常情况失败: {str(e)}")
     
-    def run_batch_evaluation(self, test_cases: List[TestCase]) -> pd.DataFrame:
-        """批量运行评测"""
-        logger.info(f"开始批量评测，共 {len(test_cases)} 条用例")
+    def run_batch_evaluation(self, test_cases: List[TestCase], max_workers: int = 1, delay_between_requests: float = 0.5) -> pd.DataFrame:
+        """
+        批量运行评测
+        
+        参数:
+            test_cases: 测试用例列表
+            max_workers: 并发线程数，默认为1（顺序执行）。设置为大于1的值启用并发执行
+            delay_between_requests: 每个请求之间的延迟（秒），用于避免API限流，默认0.5秒
+                                  注意：并发模式下，延迟会在每个线程中独立应用
+        
+        返回:
+            pd.DataFrame: 评测结果数据框
+        """
+        total_cases = len(test_cases)
+        logger.info(f"开始批量评测，共 {total_cases} 条用例")
         logger.info(f"API响应将保存到目录: {self.api_responses_dir.absolute()}")
         
-        anomalies = []  # 记录异常情况
+        if max_workers > 1:
+            logger.info(f"使用并发模式，并发线程数: {max_workers}")
+        else:
+            logger.info("使用顺序执行模式")
         
-        for idx, test_case in enumerate(test_cases, 1):
-            logger.info(f"\n{'='*80}")
-            logger.info(f"进度: {idx}/{len(test_cases)}")
-            logger.info(f"{'='*80}\n")
-            result = self.run_single_test(test_case, test_index=idx)
-            self.results.append(result)
-            
-            # 检查是否为异常情况（准确率为0或召回率为0）
-            if result.get('accuracy', 1.0) == 0.0 or result.get('recall', 1.0) == 0.0:
-                anomaly = {
+        anomalies = []  # 记录异常情况
+        anomalies_lock = Lock()  # 异常列表的线程安全锁
+        completed_count = 0  # 已完成数量
+        completed_lock = Lock()  # 完成计数的线程安全锁
+        
+        def run_single_test_with_index(args):
+            """包装函数，用于并发执行"""
+            idx, test_case = args
+            try:
+                # 线程安全的进度日志
+                with self.logger_lock:
+                    logger.info(f"\n{'='*80}")
+                    logger.info(f"进度: {idx}/{total_cases}")
+                    logger.info(f"{'='*80}\n")
+                
+                # 执行测试
+                result = self.run_single_test(test_case, test_index=idx)
+                
+                # 线程安全地添加结果
+                with self.results_lock:
+                    self.results.append(result)
+                
+                # 检查是否为异常情况
+                if result.get('accuracy', 1.0) == 0.0 or result.get('recall', 1.0) == 0.0:
+                    anomaly = {
+                        "test_index": idx,
+                        "question": result.get('question', ''),
+                        "reference": result.get('reference', ''),
+                        "theme": result.get('theme', ''),
+                        "type": result.get('type', ''),
+                        "answer": result.get('answer', ''),
+                        "accuracy": result.get('accuracy', 0.0),
+                        "recall": result.get('recall', 0.0),
+                        "recall@3": result.get('recall@3', 0.0),
+                        "recall@5": result.get('recall@5', 0.0),
+                        "recall@10": result.get('recall@10', 0.0),
+                        "top3_chapters": result.get('top3_chapters', []),
+                        "top5_chapters": result.get('top5_chapters', []),
+                        "top10_chapters": result.get('top10_chapters', []),
+                    }
+                    with anomalies_lock:
+                        anomalies.append(anomaly)
+                    with self.logger_lock:
+                        logger.warning(f"发现异常情况 (Test {idx}): 准确率={result.get('accuracy', 0.0)}, 召回率={result.get('recall', 0.0)}")
+                
+                # 更新完成计数
+                with completed_lock:
+                    nonlocal completed_count
+                    completed_count += 1
+                    if completed_count % 10 == 0 or completed_count == total_cases:
+                        logger.info(f"已完成 {completed_count}/{total_cases} 个测试用例 ({completed_count/total_cases*100:.1f}%)")
+                
+                # 延迟以避免API限流（每个线程独立延迟）
+                if delay_between_requests > 0:
+                    time.sleep(delay_between_requests)
+                
+                return result
+            except Exception as e:
+                with self.logger_lock:
+                    logger.error(f"测试用例 {idx} 执行失败: {str(e)}")
+                # 返回错误结果
+                error_result = {
                     "test_index": idx,
-                    "question": result.get('question', ''),
-                    "reference": result.get('reference', ''),
-                    "theme": result.get('theme', ''),
-                    "type": result.get('type', ''),
-                    "answer": result.get('answer', ''),
-                    "accuracy": result.get('accuracy', 0.0),
-                    "recall": result.get('recall', 0.0),
-                    "recall@3": result.get('recall@3', 0.0),
-                    "recall@5": result.get('recall@5', 0.0),
-                    "recall@10": result.get('recall@10', 0.0),
-                    "top3_chapters": result.get('top3_chapters', []),
-                    "top5_chapters": result.get('top5_chapters', []),
-                    "top10_chapters": result.get('top10_chapters', []),
+                    "question": test_case.question if test_case else "",
+                    "answer": "",
+                    "reference": test_case.reference if test_case else "",
+                    "type": test_case.type if test_case else None,
+                    "theme": test_case.theme if test_case else None,
+                    "error": str(e),
+                    "latency": 0.0,
+                    "accuracy": 0.0,
+                    "recall": 0.0,
                 }
-                anomalies.append(anomaly)
-                logger.warning(f"发现异常情况 (Test {idx}): 准确率={result.get('accuracy', 0.0)}, 召回率={result.get('recall', 0.0)}")
+                with self.results_lock:
+                    self.results.append(error_result)
+                with completed_lock:
+                    completed_count += 1
+                return error_result
+        
+        # 根据 max_workers 决定使用并发还是顺序执行
+        if max_workers > 1:
+            # 并发执行
+            start_time = time.time()
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # 提交所有任务
+                future_to_index = {
+                    executor.submit(run_single_test_with_index, (idx, test_case)): idx
+                    for idx, test_case in enumerate(test_cases, 1)
+                }
+                
+                # 等待所有任务完成（可选：可以在这里添加进度显示）
+                for future in as_completed(future_to_index):
+                    try:
+                        future.result()  # 获取结果，如果有异常会在这里抛出
+                    except Exception as e:
+                        idx = future_to_index[future]
+                        with self.logger_lock:
+                            logger.error(f"任务 {idx} 执行异常: {str(e)}")
             
-            time.sleep(0.5)  # 避免API限流
+            elapsed_time = time.time() - start_time
+            logger.info(f"并发执行完成，总耗时: {elapsed_time:.2f}秒")
+        else:
+            # 顺序执行（原有逻辑）
+            for idx, test_case in enumerate(test_cases, 1):
+                run_single_test_with_index((idx, test_case))
+        
+        # 按 test_index 排序结果，确保顺序一致
+        self.results.sort(key=lambda x: x.get('test_index', 0))
         
         # 保存异常情况
         if anomalies:
@@ -1207,17 +1308,26 @@ class ABTestComparator:
     
     def run_ab_test(self, test_cases: List[TestCase], 
                     config_a: RetrievalConfig, 
-                    config_b: RetrievalConfig) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+                    config_b: RetrievalConfig,
+                    max_workers: int = 1,
+                    delay_between_requests: float = 0.5) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """运行A/B对比测试
         返回: (comparison_df, df_a, df_b) - 对比结果、A组结果、B组结果
+        
+        参数:
+            test_cases: 测试用例列表
+            config_a: A组配置
+            config_b: B组配置
+            max_workers: 并发线程数，默认为1（顺序执行）
+            delay_between_requests: 每个请求之间的延迟（秒），默认0.5秒
         """
         logger.info("开始A/B对比测试")
         
         runner_a = EvaluationRunner(self.client_a, config_a)
         runner_b = EvaluationRunner(self.client_b, config_b)
         
-        df_a = runner_a.run_batch_evaluation(test_cases)
-        df_b = runner_b.run_batch_evaluation(test_cases)
+        df_a = runner_a.run_batch_evaluation(test_cases, max_workers=max_workers, delay_between_requests=delay_between_requests)
+        df_b = runner_b.run_batch_evaluation(test_cases, max_workers=max_workers, delay_between_requests=delay_between_requests)
         
         # 生成对比报告
         comparison = self.generate_comparison(df_a, df_b)
@@ -1418,83 +1528,156 @@ if __name__ == "__main__":
     #     test_cases = test_cases[:10]
     #     logger.info(f"测试数据已限制为前10条")
     
-    print(f"\n将使用 {len(test_cases)} 条测试数据进行A/B测试")
+    # ========== 并发配置 ==========
+    # 从配置文件读取并发参数，如果没有则使用默认值
+    max_workers = getattr(config, 'MAX_WORKERS', 1)  # 默认顺序执行
+    delay_between_requests = getattr(config, 'DELAY_BETWEEN_REQUESTS', 0.5)  # 默认0.5秒延迟
     
-    # ========== A/B测试配置 ==========
-    # 配置A: vector_similarity_weight = 0.3 (默认值)
-    logger.info("=" * 80)
-    logger.info("配置 A: vector_similarity_weight = 0.3 (默认值)")
-    logger.info("=" * 80)
-    config_a = RetrievalConfig(
-        dataset_ids=[],  # 留空，search 方法会自动加载
-        document_ids=[],  # 留空，search 方法会自动加载
-        top_k=1024,  # API默认值
-        similarity_threshold=0.2,  # API默认值
-        vector_similarity_weight=0.3,  # A组：默认权重
-        rerank_id="",  # API默认值
-        highlight=False,  # API默认值
-        page=1,  # API默认值
-        page_size=30  # API默认值
-    )
+    if max_workers > 1:
+        logger.info(f"并发模式已启用: {max_workers} 个并发线程")
+        logger.info(f"请求延迟: {delay_between_requests} 秒")
+    else:
+        logger.info("使用顺序执行模式（单线程）")
     
-    # 配置B: vector_similarity_weight = 0.7 (更高权重)
-    logger.info("=" * 80)
-    logger.info("配置 B: vector_similarity_weight = 0.7 (更高权重)")
-    logger.info("=" * 80)
-    config_b = RetrievalConfig(
-        dataset_ids=[],  # 留空，search 方法会自动加载
-        document_ids=[],  # 留空，search 方法会自动加载
-        top_k=1024,  # API默认值
-        similarity_threshold=0.2,  # API默认值
-        vector_similarity_weight=0.7,  # B组：更高权重
-        rerank_id="",  # API默认值
-        highlight=False,  # API默认值
-        page=1,  # API默认值
-        page_size=30  # API默认值
-    )
+    # ========== 判断是否启用A/B测试 ==========
+    enable_ab_test = getattr(config, 'ENABLE_AB_TEST', False)  # 默认不启用A/B测试
     
-    # 创建A/B测试对比器（使用同一个客户端，只是配置不同）
-    ab_comparator = ABTestComparator(client, client)
-    
-    # 运行A/B测试
-    comparison_df, results_df_a, results_df_b = ab_comparator.run_ab_test(test_cases, config_a, config_b)
-    
-    # 保存A/B测试对比结果
-    comparison_csv_path = output_dir / "ab_test_comparison.csv"
-    comparison_df.to_csv(comparison_csv_path, index=False, encoding='utf-8-sig')
-    logger.info(f"A/B测试对比结果已保存到: {comparison_csv_path}")
-    
-    # 生成A组和B组的详细报告
-    logger.info("=" * 80)
-    logger.info("生成A组详细报告")
-    logger.info("=" * 80)
-    runner_a = EvaluationRunner(client, config_a)
-    summary_a = runner_a.generate_report(results_df_a, str(output_dir / "evaluation_results_a.html"))
-    csv_path_a = output_dir / "evaluation_results_a.csv"
-    results_df_a.to_csv(csv_path_a, index=False, encoding='utf-8-sig')
-    logger.info(f"A组评测结果已保存到: {csv_path_a}")
-    
-    logger.info("=" * 80)
-    logger.info("生成B组详细报告")
-    logger.info("=" * 80)
-    runner_b = EvaluationRunner(client, config_b)
-    summary_b = runner_b.generate_report(results_df_b, str(output_dir / "evaluation_results_b.html"))
-    csv_path_b = output_dir / "evaluation_results_b.csv"
-    results_df_b.to_csv(csv_path_b, index=False, encoding='utf-8-sig')
-    logger.info(f"B组评测结果已保存到: {csv_path_b}")
-    
-    print("\n" + "=" * 80)
-    print("===== A/B测试完成 =====")
-    print("=" * 80)
-    print("\n对比结果:")
-    print(comparison_df.to_string(index=False))
-    print("\nA组总体指标:")
-    for metric, value in summary_a.items():
-        print(f"  {metric}: {value:.4f}")
-    print("\nB组总体指标:")
-    for metric, value in summary_b.items():
-        print(f"  {metric}: {value:.4f}")
-    print("\n改进百分比 (B vs A):")
-    for _, row in comparison_df.iterrows():
-        improvement = row['Improvement']
-        print(f"  {row['Metric']}: {improvement:+.2f}%")
+    if enable_ab_test:
+        # ========== A/B测试模式 ==========
+        print(f"\n将使用 {len(test_cases)} 条测试数据进行A/B测试")
+        
+        # 配置A: vector_similarity_weight = 0.3 (默认值)
+        logger.info("=" * 80)
+        logger.info("配置 A: vector_similarity_weight = 0.3 (默认值)")
+        logger.info("=" * 80)
+        config_a = RetrievalConfig(
+            dataset_ids=[],  # 留空，search 方法会自动加载
+            document_ids=[],  # 留空，search 方法会自动加载
+            top_k=1024,  # API默认值
+            similarity_threshold=0.2,  # API默认值
+            vector_similarity_weight=0.3,  # A组：默认权重
+            rerank_id="",  # API默认值
+            highlight=False,  # API默认值
+            page=1,  # API默认值
+            page_size=30  # API默认值
+        )
+        
+        # 配置B: vector_similarity_weight = 0.7 (更高权重)
+        logger.info("=" * 80)
+        logger.info("配置 B: vector_similarity_weight = 0.7 (更高权重)")
+        logger.info("=" * 80)
+        config_b = RetrievalConfig(
+            dataset_ids=[],  # 留空，search 方法会自动加载
+            document_ids=[],  # 留空，search 方法会自动加载
+            top_k=1024,  # API默认值
+            similarity_threshold=0.2,  # API默认值
+            vector_similarity_weight=0.7,  # B组：更高权重
+            rerank_id="",  # API默认值
+            highlight=False,  # API默认值
+            page=1,  # API默认值
+            page_size=30  # API默认值
+        )
+        
+        # 创建A/B测试对比器（使用同一个客户端，只是配置不同）
+        ab_comparator = ABTestComparator(client, client)
+        
+        # 运行A/B测试（支持并发）
+        comparison_df, results_df_a, results_df_b = ab_comparator.run_ab_test(
+            test_cases, config_a, config_b,
+            max_workers=max_workers,
+            delay_between_requests=delay_between_requests
+        )
+        
+        # 保存A/B测试对比结果
+        comparison_csv_path = output_dir / "ab_test_comparison.csv"
+        comparison_df.to_csv(comparison_csv_path, index=False, encoding='utf-8-sig')
+        logger.info(f"A/B测试对比结果已保存到: {comparison_csv_path}")
+        
+        # 生成A组和B组的详细报告
+        logger.info("=" * 80)
+        logger.info("生成A组详细报告")
+        logger.info("=" * 80)
+        runner_a = EvaluationRunner(client, config_a)
+        summary_a = runner_a.generate_report(results_df_a, str(output_dir / "evaluation_results_a.html"))
+        csv_path_a = output_dir / "evaluation_results_a.csv"
+        results_df_a.to_csv(csv_path_a, index=False, encoding='utf-8-sig')
+        logger.info(f"A组评测结果已保存到: {csv_path_a}")
+        
+        logger.info("=" * 80)
+        logger.info("生成B组详细报告")
+        logger.info("=" * 80)
+        runner_b = EvaluationRunner(client, config_b)
+        summary_b = runner_b.generate_report(results_df_b, str(output_dir / "evaluation_results_b.html"))
+        csv_path_b = output_dir / "evaluation_results_b.csv"
+        results_df_b.to_csv(csv_path_b, index=False, encoding='utf-8-sig')
+        logger.info(f"B组评测结果已保存到: {csv_path_b}")
+        
+        print("\n" + "=" * 80)
+        print("===== A/B测试完成 =====")
+        print("=" * 80)
+        print("\n对比结果:")
+        print(comparison_df.to_string(index=False))
+        print("\nA组总体指标:")
+        for metric, value in summary_a.items():
+            print(f"  {metric}: {value:.4f}")
+        print("\nB组总体指标:")
+        for metric, value in summary_b.items():
+            print(f"  {metric}: {value:.4f}")
+        print("\n改进百分比 (B vs A):")
+        for _, row in comparison_df.iterrows():
+            improvement = row['Improvement']
+            print(f"  {row['Metric']}: {improvement:+.2f}%")
+    else:
+        # ========== 单次评测模式 ==========
+        print(f"\n将使用 {len(test_cases)} 条测试数据进行单次评测")
+        
+        # 从配置文件读取检索配置
+        retrieval_config_dict = getattr(config, 'RETRIEVAL_CONFIG', {})
+        
+        # 创建检索配置
+        retrieval_config = RetrievalConfig(
+            dataset_ids=[],  # 留空，search 方法会自动加载
+            document_ids=[],  # 留空，search 方法会自动加载
+            top_k=retrieval_config_dict.get('top_k', 1024),
+            similarity_threshold=retrieval_config_dict.get('similarity_threshold', 0.2),
+            vector_similarity_weight=retrieval_config_dict.get('vector_similarity_weight', 0.3),
+            rerank_id=retrieval_config_dict.get('rerank_id', ''),
+            highlight=retrieval_config_dict.get('highlight', False),
+            page=retrieval_config_dict.get('page', 1),
+            page_size=retrieval_config_dict.get('page_size', 30)
+        )
+        
+        logger.info("=" * 80)
+        logger.info("检索配置:")
+        logger.info(f"  top_k: {retrieval_config.top_k}")
+        logger.info(f"  similarity_threshold: {retrieval_config.similarity_threshold}")
+        logger.info(f"  vector_similarity_weight: {retrieval_config.vector_similarity_weight}")
+        logger.info("=" * 80)
+        
+        # 创建评测运行器
+        runner = EvaluationRunner(client, retrieval_config)
+        
+        # 运行批量评测（支持并发）
+        results_df = runner.run_batch_evaluation(
+            test_cases,
+            max_workers=max_workers,
+            delay_between_requests=delay_between_requests
+        )
+        
+        # 生成报告
+        logger.info("=" * 80)
+        logger.info("生成评测报告")
+        logger.info("=" * 80)
+        summary = runner.generate_report(results_df)
+        
+        # 保存结果
+        csv_path = output_dir / "evaluation_results.csv"
+        results_df.to_csv(csv_path, index=False, encoding='utf-8-sig')
+        logger.info(f"评测结果已保存到: {csv_path}")
+        
+        print("\n" + "=" * 80)
+        print("===== 评测完成 =====")
+        print("=" * 80)
+        print("\n总体指标:")
+        for metric, value in summary.items():
+            print(f"  {metric}: {value:.4f}")

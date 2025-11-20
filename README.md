@@ -5,6 +5,7 @@
 ## ✨ 核心特性
 
 - 🔄 **批量自动化评测** - 支持大规模测试用例的批量处理
+- ⚡ **并发执行支持** - 支持多线程并发执行，大幅提升评测速度
 - 📊 **多维度指标计算** - 准确率、召回率、Recall@K、响应时间等
 - 🎯 **智能章节匹配** - 支持中英文章节格式，智能判断匹配关系
 - 📈 **可视化报告** - 自动生成交互式 HTML 仪表盘
@@ -109,6 +110,53 @@ input_dir = Path("your_input_dir")
 output_dir = Path("your_output_dir")
 ```
 
+### 并发执行配置
+
+工具支持并发执行测试用例，可以大幅提升评测速度。在 `config.py` 中配置：
+
+```python
+# 并发线程数，设置为1表示顺序执行（单线程），大于1表示并发执行
+MAX_WORKERS = 5  # 建议值：3-10，根据API服务器能力调整
+
+# 每个请求之间的延迟（秒），用于避免API限流
+DELAY_BETWEEN_REQUESTS = 0.5  # 建议值：0.1-1.0 秒
+```
+
+**使用建议**：
+- **顺序执行**（`MAX_WORKERS = 1`）：适合API有严格限流或测试用例较少的情况
+- **并发执行**（`MAX_WORKERS > 1`）：适合大规模测试，可显著提升速度
+  - 建议从较小的并发数开始（如 3-5），逐步增加
+  - 注意观察API服务器的响应和限流情况
+  - 如果遇到限流错误，可以增加 `DELAY_BETWEEN_REQUESTS` 或减少 `MAX_WORKERS`
+
+**性能提升示例**：
+- 100个测试用例，顺序执行：约 100-200 秒（取决于API响应时间）
+- 100个测试用例，5并发：约 20-40 秒（约5倍提升）
+
+### A/B 测试开关配置
+
+通过配置变量控制是否启用 A/B 测试：
+
+```python
+# 是否启用A/B测试
+ENABLE_AB_TEST = False  # True: 启用A/B测试, False: 单次评测
+
+# 单次评测配置（当ENABLE_AB_TEST=False时使用）
+RETRIEVAL_CONFIG = {
+    "top_k": 1024,
+    "similarity_threshold": 0.2,
+    "vector_similarity_weight": 0.3,
+    "rerank_id": "",
+    "highlight": False,
+    "page": 1,
+    "page_size": 30
+}
+```
+
+**使用场景**：
+- **单次评测**（`ENABLE_AB_TEST = False`）：适合日常评测，使用单一配置
+- **A/B 测试**（`ENABLE_AB_TEST = True`）：适合对比不同配置方案的效果
+
 ## 📊 评测指标说明
 
 ### 准确率 (Accuracy)
@@ -191,7 +239,35 @@ output_dir = Path("your_output_dir")
 
 ### A/B 测试对比
 
-对比两种不同配置方案的效果：
+#### 启用 A/B 测试
+
+在 `config.py` 中设置：
+
+```python
+ENABLE_AB_TEST = True  # 启用 A/B 测试
+```
+
+程序会自动运行两种配置方案的对比测试，并生成对比报告。
+
+#### 单次评测模式
+
+在 `config.py` 中设置：
+
+```python
+ENABLE_AB_TEST = False  # 关闭 A/B 测试，使用单次评测
+
+# 配置检索参数
+RETRIEVAL_CONFIG = {
+    "top_k": 1024,
+    "similarity_threshold": 0.2,
+    "vector_similarity_weight": 0.3,
+    # ... 其他参数
+}
+```
+
+#### 编程方式使用 A/B 测试
+
+如果需要自定义配置，也可以通过代码方式：
 
 ```python
 from evaluation_tool import RagFlowClient, RetrievalConfig, ABTestComparator
@@ -213,9 +289,13 @@ config_b = RetrievalConfig(
     keyword=True
 )
 
-# 运行A/B测试
+# 运行A/B测试（支持并发）
 comparator = ABTestComparator(client, client)
-comparison = comparator.run_ab_test(test_cases, config_a, config_b)
+comparison = comparator.run_ab_test(
+    test_cases, config_a, config_b,
+    max_workers=5,  # 并发线程数
+    delay_between_requests=0.5  # 请求延迟
+)
 
 # 查看对比结果
 print(comparison)
@@ -306,6 +386,21 @@ if len(test_cases) > 10:
 - 修改 `MetricsCalculator` 类添加新的指标计算方法
 - 在 `EvaluationRunner.run_single_test()` 中调用新的计算方法
 - 更新 `EvaluationDashboard` 以展示新指标
+
+### Q6: 并发执行时遇到 API 限流错误
+
+**解决方案**：
+1. 减少并发线程数：将 `MAX_WORKERS` 从 5 减少到 3 或更小
+2. 增加请求延迟：将 `DELAY_BETWEEN_REQUESTS` 从 0.5 增加到 1.0 或更高
+3. 检查 API 服务器的限流策略，根据实际情况调整参数
+
+### Q7: 如何切换单次评测和 A/B 测试模式？
+
+**解决方案**：
+- 在 `config.py` 中修改 `ENABLE_AB_TEST` 变量：
+  - `False`：单次评测模式，使用 `RETRIEVAL_CONFIG` 配置
+  - `True`：A/B 测试模式，对比两种配置方案
+- 修改后直接运行程序即可，无需修改代码
 
 ## 📝 使用示例
 
