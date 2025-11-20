@@ -17,7 +17,7 @@
 ```
 automate_testing/
 ├── README.md                      # 项目说明文档
-├── ragflow_eval.py               # 主程序（核心评测逻辑）
+├── evaluation_tool.py            # 主程序（核心评测逻辑）
 ├── evaluation_dashboard.py        # 可视化报告生成器
 ├── evaluation_metrics_tools.py   # 评估指标分析工具
 ├── audit_theme.py                # 主题审核工具
@@ -63,7 +63,7 @@ pip install pandas numpy requests openpyxl matplotlib seaborn
 
 3. **配置 API 信息**
 
-编辑 `ragflow_eval.py`，找到 `RagFlowClient` 初始化部分（约第 1035-1037 行），修改为你的 API 配置：
+编辑 `evaluation_tool.py`，找到 `RagFlowClient` 初始化部分，修改配置文件 `config.py` 中的 API 配置：
 
 ```python
 client = RagFlowClient(
@@ -75,7 +75,7 @@ client = RagFlowClient(
 4. **运行评测**
 
 ```bash
-python ragflow_eval.py
+python evaluation_tool.py
 ```
 
 程序将自动：
@@ -88,7 +88,7 @@ python ragflow_eval.py
 
 ### 检索参数配置
 
-在 `ragflow_eval.py` 中的 `RetrievalConfig` 部分（约第 1054-1065 行）可调整检索参数：
+在 `evaluation_tool.py` 中的 `RetrievalConfig` 部分可调整检索参数：
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -102,7 +102,7 @@ python ragflow_eval.py
 
 ### 输出目录配置
 
-如需修改输入/输出目录，编辑 `ragflow_eval.py` 文件开头（约第 20-24 行）：
+如需修改输入/输出目录，编辑 `evaluation_tool.py` 文件开头（约第 20-24 行）：
 
 ```python
 input_dir = Path("your_input_dir")
@@ -166,7 +166,7 @@ output_dir = Path("your_output_dir")
 
 在浏览器中打开即可查看完整报告。
 
-### 3. `logs/ragflow_eval_*.log`
+### 3. `logs/evaluation_tool_*.log`
 
 运行日志文件，记录：
 - 每个测试用例的执行情况
@@ -194,7 +194,7 @@ output_dir = Path("your_output_dir")
 对比两种不同配置方案的效果：
 
 ```python
-from ragflow_eval import RagFlowClient, RetrievalConfig, ABTestComparator
+from evaluation_tool import RagFlowClient, RetrievalConfig, ABTestComparator
 
 # 创建客户端
 client = RagFlowClient(api_url="...", api_key="...")
@@ -225,7 +225,7 @@ print(comparison)
 
 ### 限制测试数据量
 
-如需快速测试，可限制测试数据量。在 `ragflow_eval.py` 中找到相应位置（约第 1078-1081 行），取消注释：
+如需快速测试，可限制测试数据量。在 `evaluation_tool.py` 中找到相应位置，取消注释：
 
 ```python
 # 限制测试数据为前10条
@@ -313,15 +313,15 @@ if len(test_cases) > 10:
 
 ```bash
 # 1. 准备测试数据：input/test.xlsx
-# 2. 配置 API：修改 ragflow_eval.py 中的 api_url 和 api_key
-# 3. 运行评测：python ragflow_eval.py
+# 2. 配置 API：复制 config.py.example 为 config.py 并填入 API 配置
+# 3. 运行评测：python evaluation_tool.py
 # 4. 查看结果：打开 output/evaluation_dashboard.html
 ```
 
 ### 示例 2：调整检索参数
 
 ```python
-# 在 ragflow_eval.py 中修改 RetrievalConfig
+# 在 evaluation_tool.py 中修改 RetrievalConfig
 config = RetrievalConfig(
     dataset_ids=["your_dataset_id"],
     top_k=10,                    # 返回10个结果
@@ -335,7 +335,7 @@ config = RetrievalConfig(
 
 ### 项目结构
 
-- `ragflow_eval.py` - 核心评测逻辑
+- `evaluation_tool.py` - 核心评测逻辑
 - `evaluation_dashboard.py` - 可视化报告生成
 - `evaluation_metrics_tools.py` - 指标分析工具
 - `audit_theme.py` - 主题审核工具

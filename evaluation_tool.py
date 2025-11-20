@@ -46,7 +46,7 @@ class SafeStreamHandler(logging.StreamHandler):
 
 # 配置日志处理器
 file_handler = logging.FileHandler(
-    logs_dir / f'ragflow_eval_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log',
+    logs_dir / f'evaluation_tool_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log',
     encoding='utf-8'
 )
 stream_handler = SafeStreamHandler(sys.stdout)
@@ -1352,24 +1352,42 @@ if __name__ == "__main__":
     # 配置RagFlow客户端
     # 请注意：不同环境有不同的api_url和api_key，需要根据实际情况选择使用哪个环境
 
-    # # 生产环境
-    # logger.info("================================================")
-    # logger.info("使用生产环境")
-    # logger.info("================================================")
-    # client = RagFlowClient(
-    #     api_url="http://192.168.1.168:9222/",
-    #     api_key="ragflow-fV9iHE6hm-FUIKiUn_mvpvUWhYrYNZ_URvf7TDQmbQU"
-    # )
-
-
-    # # 测试环境
-    logger.info("================================================")
-    logger.info("使用测试环境")
-    logger.info("================================================")
-    client = RagFlowClient(
-        api_url="http://192.168.2.168:9222/",
-        api_key="ragflow-fV9iHE6hm-FUIKiUn_mvpvUWhYrYNZ_URvf7TDQmbQU"
-    )
+    # 从配置文件加载 API 配置
+    try:
+        import config
+        env = getattr(config, 'DEFAULT_ENV', 'test').lower()
+        
+        if env == 'prod':
+            logger.info("================================================")
+            logger.info("使用生产环境")
+            logger.info("================================================")
+            api_url = getattr(config, 'PROD_API_URL', '')
+            api_key = getattr(config, 'PROD_API_KEY', '')
+        else:
+            logger.info("================================================")
+            logger.info("使用测试环境")
+            logger.info("================================================")
+            api_url = getattr(config, 'TEST_API_URL', '')
+            api_key = getattr(config, 'TEST_API_KEY', '')
+        
+        if not api_url or not api_key:
+            raise ValueError("配置文件中的 API URL 或 API Key 为空")
+        
+        client = RagFlowClient(api_url=api_url, api_key=api_key)
+        
+    except ImportError:
+        logger.error("=" * 80)
+        logger.error("错误: 找不到 config.py 配置文件")
+        logger.error("=" * 80)
+        logger.error("请按照以下步骤操作:")
+        logger.error("1. 复制 config.py.example 为 config.py")
+        logger.error("2. 在 config.py 中填入你的 API 配置信息")
+        logger.error("3. config.py 已被添加到 .gitignore，不会被提交到 GitHub")
+        logger.error("=" * 80)
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"加载配置失败: {str(e)}")
+        sys.exit(1)
     
     # 如果 datasets.json 不存在，自动生成
     import os
