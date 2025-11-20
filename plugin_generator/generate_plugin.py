@@ -1,7 +1,7 @@
 """
 生成OpenWebUI插件
 输入: evaluation_results.csv (固定)
-输出: evaluation_metrics_tools.py (固定)
+输出: evaluation_plugin.py (固定，生成在plugin_generator目录)
 """
 
 import pandas as pd
@@ -10,7 +10,7 @@ from pathlib import Path
 
 # 固定路径
 CSV_PATH = "../output/evaluation_results.csv"
-OUTPUT_PATH = "../evaluation_metrics_tools.py"
+OUTPUT_PATH = Path(__file__).parent / "evaluation_plugin.py"
 TEMPLATE_PATH = Path(__file__).parent / "tools_template.py"
 
 # 读取CSV文件

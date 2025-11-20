@@ -20,7 +20,9 @@ automate_testing/
 ├── README.md                      # 项目说明文档
 ├── evaluation_tool.py            # 主程序（核心评测逻辑）
 ├── evaluation_dashboard.py        # 可视化报告生成器
-├── evaluation_metrics_tools.py   # 评估指标分析工具
+├── plugin_generator/              # OpenWebUI插件生成器
+│   ├── evaluation_plugin.py      # 评估指标分析插件（自动生成）
+│   └── generate_plugin.py         # 插件生成脚本
 ├── audit_theme.py                # 主题审核工具
 │
 ├── input/                         # 输入数据目录
@@ -432,7 +434,7 @@ config = RetrievalConfig(
 
 - `evaluation_tool.py` - 核心评测逻辑
 - `evaluation_dashboard.py` - 可视化报告生成
-- `evaluation_metrics_tools.py` - 指标分析工具
+- `plugin_generator/evaluation_plugin.py` - 指标分析插件（OpenWebUI插件）
 - `audit_theme.py` - 主题审核工具
 
 ### 扩展开发

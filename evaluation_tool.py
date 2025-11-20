@@ -845,9 +845,12 @@ class EvaluationRunner:
                     'theme': test_case.theme,
                     'response': response
                 }, f, ensure_ascii=False, indent=2)
-            logger.info(f"API响应已保存到: {filepath}")
+            # 使用线程安全的方式记录日志
+            with self.logger_lock:
+                logger.info(f"[Test {test_index}] API响应已保存到: {filepath}")
         except Exception as e:
-            logger.error(f"保存API响应失败: {str(e)}")
+            with self.logger_lock:
+                logger.error(f"[Test {test_index}] 保存API响应失败: {str(e)}")
     
     def _extract_chapter_from_important_keywords(self, important_keywords: List[str]) -> Optional[str]:
         """
@@ -882,10 +885,12 @@ class EvaluationRunner:
     
     def run_single_test(self, test_case: TestCase, test_index: int = 0) -> Dict[str, Any]:
         """运行单个测试用例"""
-        logger.info("=" * 80)
-        logger.info(f"测试Question: {test_case.question}")       
-        logger.info(f"手册Theme: {test_case.theme}")       
-        logger.info(f"标注Reference: {test_case.reference}")
+        # 为日志添加测试索引前缀，便于在并行执行时追踪
+        log_prefix = f"[Test {test_index}]"
+        logger.info(f"{log_prefix} {'=' * 80}")
+        logger.info(f"{log_prefix} 测试Question: {test_case.question}")       
+        logger.info(f"{log_prefix} 手册Theme: {test_case.theme}")       
+        logger.info(f"{log_prefix} 标注Reference: {test_case.reference}")
         
         start_time = time.time()
         response = self.client.search(test_case.question, test_case.theme, self.config)
@@ -895,7 +900,7 @@ class EvaluationRunner:
         self._save_api_response(test_case, response, test_index)
         
         if "error" in response:
-            logger.warning(f"API返回错误: {response.get('error')}")
+            logger.warning(f"{log_prefix} API返回错误: {response.get('error')}")
             return {
                 "test_index": test_index,
                 "question": test_case.question,
@@ -911,7 +916,7 @@ class EvaluationRunner:
         # 尝试多种可能的字段名
         data = response.get('data', {})
         chunks = data.get('chunks', []) if isinstance(data, dict) else []
-        logger.info(f"检索到的chunks总数: {len(chunks)}")
+        logger.info(f"{log_prefix} 检索到的chunks总数: {len(chunks)}")
  
         # 基于相似度排序所有chunks
         def get_similarity_score(chunk: Dict[str, Any]) -> Optional[float]:
@@ -955,7 +960,7 @@ class EvaluationRunner:
         top_k_for_recall = 10
         # 只取前top_k_for_recall个结果进行验证（节省时间）
         top_k_chunks = all_chunks_info[:top_k_for_recall]
-        logger.info(f"选取top {top_k_for_recall} 个结果进行验证")
+        logger.info(f"{log_prefix} 选取top {top_k_for_recall} 个结果进行验证")
         
         # 提取标注信息
         reference_chapter = ChapterMatcher.extract_chapter_info(test_case.reference)
@@ -1007,10 +1012,10 @@ class EvaluationRunner:
             top1_chapter_match = top1_result.get('chapter_match', False)
         
         # 输出验证结果
-        logger.info("-" * 80)
-        logger.info(f"标注Theme: {test_case.theme}")
-        logger.info(f"标注章节(reference): {reference_chapter}")
-        logger.info(f"Top {top_k_for_recall} 个结果的验证情况:")
+        logger.info(f"{log_prefix} {'-' * 80}")
+        logger.info(f"{log_prefix} 标注Theme: {test_case.theme}")
+        logger.info(f"{log_prefix} 标注章节(reference): {reference_chapter}")
+        logger.info(f"{log_prefix} Top {top_k_for_recall} 个结果的验证情况:")
         
         # 显示topK中每个结果的验证情况
         for rank, item in enumerate(top_k_chunks, 1):
@@ -1022,9 +1027,9 @@ class EvaluationRunner:
             both_match = item.get('both_match', False)
             marker = " <-- RAG第一结果" if rank == 1 else ""
             
-            logger.info(f"  #{rank}: 标题='{first_keyword}', 章节='{chapter_display}', "
+            logger.info(f"{log_prefix}   #{rank}: 标题='{first_keyword}', 章节='{chapter_display}', "
                        f"相似度: {item['similarity'] if item['similarity'] is not None else '无'}")
-            logger.info(f"    theme匹配: {'✓' if theme_match else '✗'}, "
+            logger.info(f"{log_prefix}     theme匹配: {'✓' if theme_match else '✗'}, "
                        f"章节匹配: {'✓' if chapter_match else '✗'}, "
                        f"同时满足: {'✓' if both_match else '✗'}{marker}")
         
@@ -1038,11 +1043,11 @@ class EvaluationRunner:
             if item.get('chapter_match', False):
                 chapter_match_count += 1
         
-        logger.info(f"统计: 同时满足={both_match_count}/{top_k_for_recall}, "
+        logger.info(f"{log_prefix} 统计: 同时满足={both_match_count}/{top_k_for_recall}, "
                    f"仅theme匹配={theme_match_count}/{top_k_for_recall}, "
                    f"仅章节匹配={chapter_match_count}/{top_k_for_recall}")
         
-        logger.info("-" * 80)
+        logger.info(f"{log_prefix} {'-' * 80}")
         
         # 计算各项指标
         # 1. accuracy：使用RAG返回的第一个结果（用于评估相似度算法的准确度）
@@ -1071,17 +1076,17 @@ class EvaluationRunner:
                 if item.get('theme_match', False):
                     theme_matched_chapters.append(chapter)
         
-        logger.info(f"正确章节: {reference_chapter}")
-        logger.info(f"实际章节: {final_chapter if final_chapter else "无"}")
-        logger.info(f"候选章节（Top {top_k_for_recall}，theme匹配后的所有章节）: {", ".join(theme_matched_chapters) if theme_matched_chapters else "无"}")
+        logger.info(f"{log_prefix} 正确章节: {reference_chapter}")
+        logger.info(f"{log_prefix} 实际章节: {final_chapter if final_chapter else "无"}")
+        logger.info(f"{log_prefix} 候选章节（Top {top_k_for_recall}，theme匹配后的所有章节）: {", ".join(theme_matched_chapters) if theme_matched_chapters else "无"}")
         
         
         # 计算recall相关指标：基于同时满足两个条件的结果
         accuracy_metrics = self.calculator.calculate_accuracy(validated_chapters, reference_chapter)
         
-        logger.info(f"准确率结果(Theme和章节是否匹配): {'是' if binary_accuracy == 1.0 else '否'}")
+        logger.info(f"{log_prefix} 准确率结果(Theme和章节是否匹配): {'是' if binary_accuracy == 1.0 else '否'}")
                     #f"{binary_accuracy:.4f}")
-        logger.info(f"召回率结果(Theme和章节是否在TOP{top_k_for_recall}结果里): {'是' if accuracy_metrics['recall'] == 1.0 else '否'}")
+        logger.info(f"{log_prefix} 召回率结果(Theme和章节是否在TOP{top_k_for_recall}结果里): {'是' if accuracy_metrics['recall'] == 1.0 else '否'}")
                     #f"{accuracy_metrics['recall']:.4f}")
         
         # 计算recall@k：使用所有topk中同时有theme和chapter的结果（不管对错）
@@ -1096,10 +1101,10 @@ class EvaluationRunner:
         recall_at_10 = self.calculator.recall_at_k(all_topk_chapters, reference_chapter, 10)
         
         # 在日志中显示recall@k的结果和对应的章节（显示所有topk章节，不管对错）
-        logger.info('-'*80)
-        logger.info(f"Recall@3: {'是' if recall_at_3 == 1.0 else '否'}, Top3章节: {', '.join(top3_chapters) if top3_chapters else '无'}")
-        logger.info(f"Recall@5: {'是' if recall_at_5 == 1.0 else '否'}, Top5章节: {', '.join(top5_chapters) if top5_chapters else '无'}")
-        logger.info(f"Recall@10: {'是' if recall_at_10 == 1.0 else '否'}, Top10章节: {', '.join(top10_chapters) if top10_chapters else '无'}")
+        logger.info(f"{log_prefix} {'-'*80}")
+        logger.info(f"{log_prefix} Recall@3: {'是' if recall_at_3 == 1.0 else '否'}, Top3章节: {', '.join(top3_chapters) if top3_chapters else '无'}")
+        logger.info(f"{log_prefix} Recall@5: {'是' if recall_at_5 == 1.0 else '否'}, Top5章节: {', '.join(top5_chapters) if top5_chapters else '无'}")
+        logger.info(f"{log_prefix} Recall@10: {'是' if recall_at_10 == 1.0 else '否'}, Top10章节: {', '.join(top10_chapters) if top10_chapters else '无'}")
         
         metrics = {
             "test_index": test_index,  # 保存测试索引，用于排序
@@ -1195,11 +1200,15 @@ class EvaluationRunner:
                 # 线程安全的进度日志
                 with self.logger_lock:
                     logger.info(f"\n{'='*80}")
-                    logger.info(f"进度: {idx}/{total_cases}")
+                    logger.info(f"[Test {idx}] 开始执行测试 ({idx}/{total_cases})")
                     logger.info(f"{'='*80}\n")
                 
                 # 执行测试
                 result = self.run_single_test(test_case, test_index=idx)
+                
+                # 测试完成日志
+                with self.logger_lock:
+                    logger.info(f"[Test {idx}] 测试完成")
                 
                 # 线程安全地添加结果
                 with self.results_lock:
@@ -1226,14 +1235,15 @@ class EvaluationRunner:
                     with anomalies_lock:
                         anomalies.append(anomaly)
                     with self.logger_lock:
-                        logger.warning(f"发现异常情况 (Test {idx}): 准确率={result.get('accuracy', 0.0)}, 召回率={result.get('recall', 0.0)}")
+                        logger.warning(f"[Test {idx}] 发现异常情况: 准确率={result.get('accuracy', 0.0)}, 召回率={result.get('recall', 0.0)}")
                 
                 # 更新完成计数
                 with completed_lock:
                     nonlocal completed_count
                     completed_count += 1
                     if completed_count % 10 == 0 or completed_count == total_cases:
-                        logger.info(f"已完成 {completed_count}/{total_cases} 个测试用例 ({completed_count/total_cases*100:.1f}%)")
+                        with self.logger_lock:
+                            logger.info(f"[进度] 已完成 {completed_count}/{total_cases} 个测试用例 ({completed_count/total_cases*100:.1f}%)")
                 
                 # 延迟以避免API限流（每个线程独立延迟）
                 if delay_between_requests > 0:
@@ -1242,7 +1252,7 @@ class EvaluationRunner:
                 return result
             except Exception as e:
                 with self.logger_lock:
-                    logger.error(f"测试用例 {idx} 执行失败: {str(e)}")
+                    logger.error(f"[Test {idx}] 测试用例执行失败: {str(e)}")
                 # 返回错误结果
                 error_result = {
                     "test_index": idx,
@@ -1280,7 +1290,7 @@ class EvaluationRunner:
                     except Exception as e:
                         idx = future_to_index[future]
                         with self.logger_lock:
-                            logger.error(f"任务 {idx} 执行异常: {str(e)}")
+                            logger.error(f"[Test {idx}] 任务执行异常: {str(e)}")
             
             elapsed_time = time.time() - start_time
             logger.info(f"并发执行完成，总耗时: {elapsed_time:.2f}秒")

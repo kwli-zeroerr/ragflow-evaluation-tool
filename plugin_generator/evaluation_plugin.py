@@ -1,9 +1,12 @@
 """
-评估指标分析工具 - OpenWebUI插件
+评估指标分析插件 - OpenWebUI插件
 用于分析评估结果中的总体指标和分类指标（按theme和type分类）
 主要关注准确率和召回率
 
 数据已嵌入，无需额外文件
+
+注意：此文件由 plugin_generator/generate_plugin.py 自动生成
+请勿手动修改，如需更新数据，请重新运行生成脚本
 """
 
 import pandas as pd

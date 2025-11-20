@@ -27,7 +27,7 @@ python generate_plugin.py
 python generate_plugin.py ../output/evaluation_results.csv
 
 # 指定输入和输出路径
-python generate_plugin.py ../output/evaluation_results.csv evaluation_metrics_tools.py
+python generate_plugin.py ../output/evaluation_results.csv evaluation_plugin.py
 ```
 
 ### 方法二：在Python中使用
@@ -37,7 +37,7 @@ from generate_plugin import generate_plugin
 
 generate_plugin(
     csv_path="evaluation_results.csv",
-    output_path="evaluation_metrics_tools.py"
+    output_path="evaluation_plugin.py"
 )
 ```
 
@@ -58,7 +58,7 @@ CSV文件必须包含以下列：
 
 ## 输出说明
 
-生成的 `evaluation_metrics_tools.py` 文件包含：
+生成的 `evaluation_plugin.py` 文件包含：
 - 所有评估数据（嵌入在代码中）
 - 完整的工具类（Tools类）
 - 5个工具方法：
@@ -70,7 +70,7 @@ CSV文件必须包含以下列：
 
 ## 部署步骤
 
-1. 运行生成脚本，生成 `evaluation_metrics_tools.py`
+1. 运行生成脚本，生成 `evaluation_plugin.py`
 2. 将生成的插件文件上传到OpenWebUI插件目录
 3. 确保服务器上安装了 `pandas` 库
 4. 重启OpenWebUI服务（如果需要）
