@@ -1,0 +1,41 @@
+# 输出目录
+output/
+output_dir/
+
+# Python 缓存文件
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 虚拟环境
+venv/
+env/
+ENV/
+.venv
+
+# IDE 配置
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 日志文件
+*.log
+logs/
+
+# 临时文件
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# 数据文件（可选，根据需要取消注释）
+# *.xlsx
+# *.csv
+# *.json
+
+# API 响应备份（通常在 output 目录下，但单独列出以防万一）
+api_responses/
+
