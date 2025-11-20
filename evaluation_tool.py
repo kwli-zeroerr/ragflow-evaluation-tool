@@ -287,13 +287,41 @@ class RagFlowClient:
         if config.use_kg is not None:
             payload["use_kg"] = config.use_kg
         
+        # 从配置文件读取重试配置
         try:
-            response = requests.post(endpoint, headers=self.headers, json=payload, timeout=30)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            logger.error(f"API调用失败: {question[:50]}... - {str(e)}")
-            return {"error": str(e), "chunks": []}
+            import config
+            max_retries = getattr(config, 'MAX_RETRIES', 3)
+            retry_delay = getattr(config, 'RETRY_DELAY', 1.0)
+            use_exponential_backoff = getattr(config, 'USE_EXPONENTIAL_BACKOFF', True)
+        except (ImportError, AttributeError):
+            max_retries = 3
+            retry_delay = 1.0
+            use_exponential_backoff = True
+        
+        # 重试机制
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                response = requests.post(endpoint, headers=self.headers, json=payload, timeout=30)
+                response.raise_for_status()
+                return response.json()
+            except requests.exceptions.RequestException as e:
+                last_error = e
+                if attempt < max_retries:
+                    # 计算重试延迟（指数退避或固定延迟）
+                    if use_exponential_backoff:
+                        delay = retry_delay * (2 ** attempt)
+                    else:
+                        delay = retry_delay
+                    
+                    logger.warning(f"API调用失败 (尝试 {attempt + 1}/{max_retries + 1}): {question[:50]}... - {str(e)}，{delay:.2f}秒后重试")
+                    time.sleep(delay)
+                else:
+                    # 最后一次尝试也失败了
+                    logger.error(f"API调用失败 (已重试 {max_retries} 次): {question[:50]}... - {str(e)}")
+        
+        # 所有重试都失败了
+        return {"error": str(last_error), "chunks": []}
 
 
 class ChapterMatcher:
@@ -758,14 +786,17 @@ class MetricsCalculator:
 class EvaluationRunner:
     """评测运行器"""
     
-    def __init__(self, client: RagFlowClient, config: RetrievalConfig):
+    def __init__(self, client: RagFlowClient, config: RetrievalConfig, output_base_dir: Optional[Path] = None):
         self.client = client
         self.config = config
         self.calculator = MetricsCalculator()
         self.results = []
+        # 设置输出基础目录，默认为output_dir
+        self.output_base_dir = output_base_dir if output_base_dir is not None else output_dir
+        self.output_base_dir.mkdir(parents=True, exist_ok=True)
         # 创建API响应保存目录
-        self.api_responses_dir = output_dir / "api_responses"
-        self.api_responses_dir.mkdir(exist_ok=True)
+        self.api_responses_dir = self.output_base_dir / "api_responses"
+        self.api_responses_dir.mkdir(parents=True, exist_ok=True)
         # 线程安全锁
         self.results_lock = Lock()
         self.logger_lock = Lock()
@@ -1102,7 +1133,7 @@ class EvaluationRunner:
         """保存异常情况到文件"""
         logger.info('-'*80)
         if output_path is None:
-            output_path = str(output_dir / "anomalies.json")
+            output_path = str(self.output_base_dir / "anomalies.json")
         try:
             # 将anomalies保存为JSON文件
             with open(output_path, 'w', encoding='utf-8') as f:
@@ -1282,7 +1313,7 @@ class EvaluationRunner:
         from evaluation_dashboard import EvaluationDashboard
         
         if output_path is None:
-            output_path = str(output_dir / "evaluation_dashboard.html")
+            output_path = str(self.output_base_dir / "evaluation_dashboard.html")
         
         # 计算latency统计信息（平均值和总和）
         latency_stats = {}
@@ -1323,8 +1354,24 @@ class ABTestComparator:
         """
         logger.info("开始A/B对比测试")
         
-        runner_a = EvaluationRunner(self.client_a, config_a)
-        runner_b = EvaluationRunner(self.client_b, config_b)
+        # 创建AB测试输出目录结构
+        ab_test_output_dir = output_dir / "ab_test"
+        ab_test_output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # A组输出目录
+        output_dir_a = ab_test_output_dir / "a"
+        output_dir_a.mkdir(parents=True, exist_ok=True)
+        
+        # B组输出目录
+        output_dir_b = ab_test_output_dir / "b"
+        output_dir_b.mkdir(parents=True, exist_ok=True)
+        
+        logger.info(f"A组结果将保存到: {output_dir_a.absolute()}")
+        logger.info(f"B组结果将保存到: {output_dir_b.absolute()}")
+        
+        # 创建带有独立输出目录的runner
+        runner_a = EvaluationRunner(self.client_a, config_a, output_base_dir=output_dir_a)
+        runner_b = EvaluationRunner(self.client_b, config_b, output_base_dir=output_dir_b)
         
         df_a = runner_a.run_batch_evaluation(test_cases, max_workers=max_workers, delay_between_requests=delay_between_requests)
         df_b = runner_b.run_batch_evaluation(test_cases, max_workers=max_workers, delay_between_requests=delay_between_requests)
@@ -1361,8 +1408,21 @@ class ABTestComparator:
         x = range(len(metrics))
         width = 0.35
         
-        plt.bar([i - width/2 for i in x], comparison_df['Plan A'], width, label='Plan A')
-        plt.bar([i + width/2 for i in x], comparison_df['Plan B'], width, label='Plan B')
+        bars_a = plt.bar([i - width/2 for i in x], comparison_df['Plan A'], width, label='Plan A')
+        bars_b = plt.bar([i + width/2 for i in x], comparison_df['Plan B'], width, label='Plan B')
+        
+        # 添加数值标注
+        def add_value_labels(bars, values):
+            """在柱状图上添加数值标注"""
+            for bar, value in zip(bars, values):
+                height = bar.get_height()
+                # 格式化数值：保留4位小数
+                label_text = f'{value:.4f}'
+                plt.text(bar.get_x() + bar.get_width() / 2., height,
+                        label_text, ha='center', va='bottom', fontsize=8)
+        
+        add_value_labels(bars_a, comparison_df['Plan A'])
+        add_value_labels(bars_b, comparison_df['Plan B'])
         
         plt.xlabel('Metrics')
         plt.ylabel('Score')
@@ -1370,8 +1430,12 @@ class ABTestComparator:
         plt.xticks(x, metrics, rotation=45, ha='right')
         plt.legend()
         plt.tight_layout()
-        output_path = output_dir / 'ab_comparison.png'
-        plt.savefig(output_path)
+        # 保存到ab_test目录
+        ab_test_output_dir = output_dir / "ab_test"
+        ab_test_output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = ab_test_output_dir / 'ab_comparison.png'
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close()  # 关闭图形以释放内存
         logger.info(f"对比图表已保存: {output_path}")
 
 
@@ -1555,7 +1619,7 @@ if __name__ == "__main__":
             document_ids=[],  # 留空，search 方法会自动加载
             top_k=1024,  # API默认值
             similarity_threshold=0.2,  # API默认值
-            vector_similarity_weight=0.3,  # A组：默认权重
+            vector_similarity_weight=0.5,  # A组：默认权重
             rerank_id="",  # API默认值
             highlight=False,  # API默认值
             page=1,  # API默认值
@@ -1571,12 +1635,51 @@ if __name__ == "__main__":
             document_ids=[],  # 留空，search 方法会自动加载
             top_k=1024,  # API默认值
             similarity_threshold=0.2,  # API默认值
-            vector_similarity_weight=0.7,  # B组：更高权重
+            vector_similarity_weight=0.9,  # B组：更高权重
             rerank_id="",  # API默认值
             highlight=False,  # API默认值
             page=1,  # API默认值
             page_size=30  # API默认值
         )
+        
+        # 创建AB测试输出目录
+        ab_test_output_dir = output_dir / "ab_test"
+        ab_test_output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 根据实际配置动态生成README说明文件，只列出A组和B组的差异
+        def get_diff_params(config_a: RetrievalConfig, config_b: RetrievalConfig) -> List[str]:
+            """找出A组和B组配置的差异参数"""
+            diff_params = []
+            if config_a.vector_similarity_weight != config_b.vector_similarity_weight:
+                diff_params.append(f"vector_similarity_weight: A={config_a.vector_similarity_weight}, B={config_b.vector_similarity_weight}")
+            if config_a.top_k != config_b.top_k:
+                diff_params.append(f"top_k: A={config_a.top_k}, B={config_b.top_k}")
+            if config_a.similarity_threshold != config_b.similarity_threshold:
+                diff_params.append(f"similarity_threshold: A={config_a.similarity_threshold}, B={config_b.similarity_threshold}")
+            if config_a.rerank_id != config_b.rerank_id:
+                diff_params.append(f"rerank_id: A={config_a.rerank_id or 'None'}, B={config_b.rerank_id or 'None'}")
+            if config_a.highlight != config_b.highlight:
+                diff_params.append(f"highlight: A={config_a.highlight}, B={config_b.highlight}")
+            return diff_params
+        
+        diff_params = get_diff_params(config_a, config_b)
+        diff_content = "\n".join([f"- {param}" for param in diff_params]) if diff_params else "- 配置相同（请检查代码）"
+        
+        readme_content = f"""# AB测试配置说明
+
+## 配置差异
+
+{diff_content}
+
+## 目录结构
+- `a/` - A组测试结果
+- `b/` - B组测试结果
+- `ab_test_comparison.csv` - AB测试对比结果
+- `ab_comparison.png` - AB测试对比图表
+"""
+        readme_path = ab_test_output_dir / "README.md"
+        readme_path.write_text(readme_content, encoding='utf-8')
+        logger.info(f"AB测试配置说明文件已保存到: {readme_path}")
         
         # 创建A/B测试对比器（使用同一个客户端，只是配置不同）
         ab_comparator = ABTestComparator(client, client)
@@ -1588,27 +1691,30 @@ if __name__ == "__main__":
             delay_between_requests=delay_between_requests
         )
         
-        # 保存A/B测试对比结果
-        comparison_csv_path = output_dir / "ab_test_comparison.csv"
+        # 保存A/B测试对比结果到ab_test目录
+        comparison_csv_path = ab_test_output_dir / "ab_test_comparison.csv"
         comparison_df.to_csv(comparison_csv_path, index=False, encoding='utf-8-sig')
         logger.info(f"A/B测试对比结果已保存到: {comparison_csv_path}")
         
-        # 生成A组和B组的详细报告
+        # 生成A组和B组的详细报告（使用已有的runner，它们已经有正确的输出目录）
         logger.info("=" * 80)
         logger.info("生成A组详细报告")
         logger.info("=" * 80)
-        runner_a = EvaluationRunner(client, config_a)
-        summary_a = runner_a.generate_report(results_df_a, str(output_dir / "evaluation_results_a.html"))
-        csv_path_a = output_dir / "evaluation_results_a.csv"
+        # A组和B组的runner已经在run_ab_test中创建，但我们需要重新创建以生成报告
+        output_dir_a = ab_test_output_dir / "a"
+        runner_a = EvaluationRunner(client, config_a, output_base_dir=output_dir_a)
+        summary_a = runner_a.generate_report(results_df_a, str(output_dir_a / "evaluation_results_a.html"))
+        csv_path_a = output_dir_a / "evaluation_results_a.csv"
         results_df_a.to_csv(csv_path_a, index=False, encoding='utf-8-sig')
         logger.info(f"A组评测结果已保存到: {csv_path_a}")
         
         logger.info("=" * 80)
         logger.info("生成B组详细报告")
         logger.info("=" * 80)
-        runner_b = EvaluationRunner(client, config_b)
-        summary_b = runner_b.generate_report(results_df_b, str(output_dir / "evaluation_results_b.html"))
-        csv_path_b = output_dir / "evaluation_results_b.csv"
+        output_dir_b = ab_test_output_dir / "b"
+        runner_b = EvaluationRunner(client, config_b, output_base_dir=output_dir_b)
+        summary_b = runner_b.generate_report(results_df_b, str(output_dir_b / "evaluation_results_b.html"))
+        csv_path_b = output_dir_b / "evaluation_results_b.csv"
         results_df_b.to_csv(csv_path_b, index=False, encoding='utf-8-sig')
         logger.info(f"B组评测结果已保存到: {csv_path_b}")
         
@@ -1628,8 +1734,15 @@ if __name__ == "__main__":
             improvement = row['Improvement']
             print(f"  {row['Metric']}: {improvement:+.2f}%")
     else:
+
+        
         # ========== 单次评测模式 ==========
         print(f"\n将使用 {len(test_cases)} 条测试数据进行单次评测")
+        
+        # 创建单次测试输出目录
+        single_output_dir = output_dir / "single"
+        single_output_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"单次测试结果将保存到: {single_output_dir.absolute()}")
         
         # 从配置文件读取检索配置
         retrieval_config_dict = getattr(config, 'RETRIEVAL_CONFIG', {})
@@ -1654,8 +1767,8 @@ if __name__ == "__main__":
         logger.info(f"  vector_similarity_weight: {retrieval_config.vector_similarity_weight}")
         logger.info("=" * 80)
         
-        # 创建评测运行器
-        runner = EvaluationRunner(client, retrieval_config)
+        # 创建评测运行器（使用单次测试输出目录）
+        runner = EvaluationRunner(client, retrieval_config, output_base_dir=single_output_dir)
         
         # 运行批量评测（支持并发）
         results_df = runner.run_batch_evaluation(
@@ -1670,8 +1783,8 @@ if __name__ == "__main__":
         logger.info("=" * 80)
         summary = runner.generate_report(results_df)
         
-        # 保存结果
-        csv_path = output_dir / "evaluation_results.csv"
+        # 保存结果到单次测试目录
+        csv_path = single_output_dir / "evaluation_results.csv"
         results_df.to_csv(csv_path, index=False, encoding='utf-8-sig')
         logger.info(f"评测结果已保存到: {csv_path}")
         
