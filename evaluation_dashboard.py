@@ -84,6 +84,56 @@ class EvaluationDashboard:
         # 默认返回原名称
         return metric_name
     
+    def _generate_latency_section(self, latency_stats_by_type, latency_stats_by_theme, 
+                                   latency_type_table_html, latency_theme_table_html) -> str:
+        """
+        生成 Latency 统计表格部分的 HTML
+        
+        Args:
+            latency_stats_by_type: 按类型的延迟统计
+            latency_stats_by_theme: 按主题的延迟统计
+            latency_type_table_html: 按类型统计表格的 HTML
+            latency_theme_table_html: 按主题统计表格的 HTML
+            
+        Returns:
+            HTML 字符串
+        """
+        if latency_stats_by_type is None and latency_stats_by_theme is None:
+            return ''
+        
+        type_section = ''
+        if latency_stats_by_type is not None:
+            type_section = f'''
+            <div class="col-md-6">
+                <div class="table-container">
+                    <h3 class="section-title">按类型响应时间统计</h3>
+                    <div class="table-responsive">
+                        {latency_type_table_html}
+                    </div>
+                </div>
+            </div>
+            '''
+        
+        theme_section = ''
+        if latency_stats_by_theme is not None:
+            theme_section = f'''
+            <div class="col-md-6">
+                <div class="table-container">
+                    <h3 class="section-title">按主题响应时间统计</h3>
+                    <div class="table-responsive">
+                        {latency_theme_table_html}
+                    </div>
+                </div>
+            </div>
+            '''
+        
+        return f'''
+        <div class="row mb-4">
+            {type_section}
+            {theme_section}
+        </div>
+        '''
+    
     def _calculate_summary(self) -> dict:
         """计算总体指标（排除latency，latency单独统计）"""
         summary = {}
@@ -461,30 +511,7 @@ class EvaluationDashboard:
         ''' if theme_stats is not None else ''}
         
         <!-- Latency统计表格 -->
-        {f'''
-        <div class="row mb-4">
-            {f'''
-            <div class="col-md-6">
-                <div class="table-container">
-                    <h3 class="section-title">按类型响应时间统计</h3>
-                    <div class="table-responsive">
-                        {latency_type_table_html}
-                    </div>
-                </div>
-            </div>
-            ''' if latency_stats_by_type is not None else ''}
-            {f'''
-            <div class="col-md-6">
-                <div class="table-container">
-                    <h3 class="section-title">按主题响应时间统计</h3>
-                    <div class="table-responsive">
-                        {latency_theme_table_html}
-                    </div>
-                </div>
-            </div>
-            ''' if latency_stats_by_theme is not None else ''}
-        </div>
-        ''' if (latency_stats_by_type is not None or latency_stats_by_theme is not None) else ''}
+        {self._generate_latency_section(latency_stats_by_type, latency_stats_by_theme, latency_type_table_html, latency_theme_table_html)}
         
         <!-- 详细结果表格 -->
         <div class="table-container">

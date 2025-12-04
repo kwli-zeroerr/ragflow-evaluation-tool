@@ -16,7 +16,7 @@ from datetime import datetime
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock
+from threading import Lock, Event
 
 # 创建统一的输入和输出目录
 input_dir = Path("input")
@@ -800,6 +800,8 @@ class EvaluationRunner:
         # 线程安全锁
         self.results_lock = Lock()
         self.logger_lock = Lock()
+        # 记录实际运行时间（从开始到结束的真实时间）
+        self.total_runtime: Optional[float] = None
     
     def load_test_set(self, test_set_path: str) -> List[TestCase]:
         """从Excel文件加载测试集"""
@@ -1077,8 +1079,8 @@ class EvaluationRunner:
                     theme_matched_chapters.append(chapter)
         
         logger.info(f"{log_prefix} 正确章节: {reference_chapter}")
-        logger.info(f"{log_prefix} 实际章节: {final_chapter if final_chapter else "无"}")
-        logger.info(f"{log_prefix} 候选章节（Top {top_k_for_recall}，theme匹配后的所有章节）: {", ".join(theme_matched_chapters) if theme_matched_chapters else "无"}")
+        logger.info(f"{log_prefix} 实际章节: {final_chapter if final_chapter else '无'}")
+        logger.info(f"{log_prefix} 候选章节（Top {top_k_for_recall}，theme匹配后的所有章节）: {', '.join(theme_matched_chapters) if theme_matched_chapters else '无'}")
         
         
         # 计算recall相关指标：基于同时满足两个条件的结果
@@ -1185,18 +1187,27 @@ class EvaluationRunner:
         
         if max_workers > 1:
             logger.info(f"使用并发模式，并发线程数: {max_workers}")
+            logger.info("提示: 按 Ctrl+C 可以中断执行，已完成的结果会被保存")
         else:
             logger.info("使用顺序执行模式")
+            logger.info("提示: 按 Ctrl+C 可以中断执行，已完成的结果会被保存")
         
         anomalies = []  # 记录异常情况
         anomalies_lock = Lock()  # 异常列表的线程安全锁
         completed_count = 0  # 已完成数量
         completed_lock = Lock()  # 完成计数的线程安全锁
+        stop_event = Event()  # 停止事件标志
         
         def run_single_test_with_index(args):
             """包装函数，用于并发执行"""
             idx, test_case = args
             try:
+                # 检查是否收到停止信号
+                if stop_event.is_set():
+                    with self.logger_lock:
+                        logger.warning(f"[Test {idx}] 已收到停止信号，跳过执行")
+                    return None
+                
                 # 线程安全的进度日志
                 with self.logger_lock:
                     logger.info(f"\n{'='*80}")
@@ -1205,6 +1216,12 @@ class EvaluationRunner:
                 
                 # 执行测试
                 result = self.run_single_test(test_case, test_index=idx)
+                
+                # 再次检查停止信号
+                if stop_event.is_set():
+                    with self.logger_lock:
+                        logger.warning(f"[Test {idx}] 执行过程中收到停止信号")
+                    return None
                 
                 # 测试完成日志
                 with self.logger_lock:
@@ -1246,7 +1263,7 @@ class EvaluationRunner:
                             logger.info(f"[进度] 已完成 {completed_count}/{total_cases} 个测试用例 ({completed_count/total_cases*100:.1f}%)")
                 
                 # 延迟以避免API限流（每个线程独立延迟）
-                if delay_between_requests > 0:
+                if delay_between_requests > 0 and not stop_event.is_set():
                     time.sleep(delay_between_requests)
                 
                 return result
@@ -1273,31 +1290,76 @@ class EvaluationRunner:
                 return error_result
         
         # 根据 max_workers 决定使用并发还是顺序执行
+        start_time = time.time()  # 记录开始时间
         if max_workers > 1:
             # 并发执行
-            start_time = time.time()
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # 提交所有任务
-                future_to_index = {
-                    executor.submit(run_single_test_with_index, (idx, test_case)): idx
-                    for idx, test_case in enumerate(test_cases, 1)
-                }
+            try:
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    # 提交所有任务
+                    future_to_index = {
+                        executor.submit(run_single_test_with_index, (idx, test_case)): idx
+                        for idx, test_case in enumerate(test_cases, 1)
+                    }
+                    
+                    # 等待所有任务完成
+                    for future in as_completed(future_to_index):
+                        # 检查停止信号
+                        if stop_event.is_set():
+                            with self.logger_lock:
+                                logger.warning("收到停止信号，等待当前任务完成...")
+                            # 不再提交新任务，但等待正在执行的任务完成
+                            # 继续处理已完成的任务
+                        
+                        try:
+                            result = future.result()  # 获取结果，如果有异常会在这里抛出
+                            if result is None:  # 如果返回None，说明被停止了
+                                continue
+                        except Exception as e:
+                            idx = future_to_index.get(future, 'unknown')
+                            with self.logger_lock:
+                                logger.error(f"[Test {idx}] 任务执行异常: {str(e)}")
+                        
+                        # 如果已停止，检查是否还有未完成的任务
+                        if stop_event.is_set():
+                            remaining = sum(1 for f in future_to_index if not f.done())
+                            if remaining == 0:
+                                break
                 
-                # 等待所有任务完成（可选：可以在这里添加进度显示）
-                for future in as_completed(future_to_index):
-                    try:
-                        future.result()  # 获取结果，如果有异常会在这里抛出
-                    except Exception as e:
-                        idx = future_to_index[future]
-                        with self.logger_lock:
-                            logger.error(f"[Test {idx}] 任务执行异常: {str(e)}")
-            
-            elapsed_time = time.time() - start_time
-            logger.info(f"并发执行完成，总耗时: {elapsed_time:.2f}秒")
+                elapsed_time = time.time() - start_time
+                self.total_runtime = elapsed_time  # 保存实际运行时间
+                if stop_event.is_set():
+                    logger.warning(f"执行被用户中断，已完成部分结果，实际运行时间: {elapsed_time:.2f}秒")
+                else:
+                    logger.info(f"并发执行完成，实际运行时间: {elapsed_time:.2f}秒")
+            except KeyboardInterrupt:
+                # 捕获 Ctrl+C
+                with self.logger_lock:
+                    logger.warning("\n收到中断信号 (Ctrl+C)，正在停止...")
+                stop_event.set()
+                # 等待当前正在执行的任务完成
+                with self.logger_lock:
+                    logger.info("等待当前任务完成...")
+                time.sleep(2)  # 给一些时间让任务完成
+                elapsed_time = time.time() - start_time
+                self.total_runtime = elapsed_time  # 保存实际运行时间
+                logger.warning(f"执行被用户中断，已完成部分结果，实际运行时间: {elapsed_time:.2f}秒")
         else:
             # 顺序执行（原有逻辑）
-            for idx, test_case in enumerate(test_cases, 1):
-                run_single_test_with_index((idx, test_case))
+            try:
+                for idx, test_case in enumerate(test_cases, 1):
+                    if stop_event.is_set():
+                        logger.warning("收到停止信号，停止顺序执行")
+                        break
+                    run_single_test_with_index((idx, test_case))
+                elapsed_time = time.time() - start_time
+                self.total_runtime = elapsed_time  # 保存实际运行时间
+                logger.info(f"顺序执行完成，实际运行时间: {elapsed_time:.2f}秒")
+            except KeyboardInterrupt:
+                logger.warning("\n收到中断信号 (Ctrl+C)，正在停止...")
+                stop_event.set()
+                elapsed_time = time.time() - start_time
+                self.total_runtime = elapsed_time  # 保存实际运行时间
+                logger.warning(f"执行被用户中断，已完成部分结果，实际运行时间: {elapsed_time:.2f}秒")
         
         # 按 test_index 排序结果，确保顺序一致
         self.results.sort(key=lambda x: x.get('test_index', 0))
@@ -1325,18 +1387,44 @@ class EvaluationRunner:
         if output_path is None:
             output_path = str(self.output_base_dir / "evaluation_dashboard.html")
         
-        # 计算latency统计信息（平均值和总和）
+        # 计算latency统计信息
         latency_stats = {}
         if 'latency' in df.columns:
-            latency_stats['latency_avg'] = df['latency'].mean()
-            latency_stats['latency_total'] = df['latency'].sum()
+            latency_stats['latency_avg'] = df['latency'].mean()  # 单个请求的平均延迟
+        
+        # 使用实际运行时间（从开始到结束的真实时间），而不是所有请求延迟的累加
+        if self.total_runtime is not None:
+            latency_stats['latency_total'] = self.total_runtime  # 实际运行时间
+        else:
+            # 如果没有记录实际运行时间，回退到累加方式（兼容旧代码）
+            if 'latency' in df.columns:
+                latency_stats['latency_total'] = df['latency'].sum()
+                logger.warning("未记录实际运行时间，使用请求延迟累加值（可能不准确）")
         
         # 使用仪表盘生成器
         dashboard = EvaluationDashboard(df, latency_stats)
         summary = dashboard.generate(output_path)
         
         logger.info(f"报告已生成: {output_path}")
-        logger.info(f"Latency统计: 平均值={latency_stats.get('latency_avg', 0):.3f}s, 总和={latency_stats.get('latency_total', 0):.3f}s")
+        logger.info(f"Latency统计: 平均响应时间={latency_stats.get('latency_avg', 0):.3f}s, 总响应时间={latency_stats.get('latency_total', 0):.2f}s")
+        
+        # 输出总体指标到日志
+        logger.info("=" * 80)
+        logger.info("总体指标:")
+        for metric, value in summary.items():
+            if isinstance(value, (int, float)):
+                if metric == 'latency_total':
+                    # 总响应时间显示为2位小数
+                    logger.info(f"  {metric}: {value:.2f}s")
+                elif 'latency' in metric.lower():
+                    # 其他latency相关指标显示为3位小数
+                    logger.info(f"  {metric}: {value:.3f}s")
+                else:
+                    logger.info(f"  {metric}: {value:.4f}")
+            else:
+                logger.info(f"  {metric}: {value}")
+        logger.info("=" * 80)
+        
         return summary
 
 
@@ -1385,6 +1473,12 @@ class ABTestComparator:
         
         df_a = runner_a.run_batch_evaluation(test_cases, max_workers=max_workers, delay_between_requests=delay_between_requests)
         df_b = runner_b.run_batch_evaluation(test_cases, max_workers=max_workers, delay_between_requests=delay_between_requests)
+        
+        # 将实际运行时间添加到DataFrame中（作为元数据）
+        if runner_a.total_runtime is not None:
+            df_a['latency_total'] = runner_a.total_runtime
+        if runner_b.total_runtime is not None:
+            df_b['latency_total'] = runner_b.total_runtime
         
         # 生成对比报告
         comparison = self.generate_comparison(df_a, df_b)
@@ -1597,10 +1691,13 @@ if __name__ == "__main__":
     temp_runner = EvaluationRunner(client, RetrievalConfig(dataset_ids=[]))
     test_cases = temp_runner.load_test_set(str(test_set_path))
     
-    # # 限制测试数据为10条
-    # if len(test_cases) > 10:
-    #     test_cases = test_cases[:10]
-    #     logger.info(f"测试数据已限制为前10条")
+    # 限制测试用例数量（如果配置了）
+    max_test_cases = getattr(config, 'MAX_TEST_CASES', None)
+    if max_test_cases and max_test_cases > 0 and len(test_cases) > max_test_cases:
+        test_cases = test_cases[:max_test_cases]
+        logger.info(f"测试用例已限制为前 {max_test_cases} 个（共 {len(test_cases)} 个）")
+    else:
+        logger.info(f"使用全部测试用例（共 {len(test_cases)} 个）")
     
     # ========== 并发配置 ==========
     # 从配置文件读取并发参数，如果没有则使用默认值
@@ -1713,6 +1810,9 @@ if __name__ == "__main__":
         # A组和B组的runner已经在run_ab_test中创建，但我们需要重新创建以生成报告
         output_dir_a = ab_test_output_dir / "a"
         runner_a = EvaluationRunner(client, config_a, output_base_dir=output_dir_a)
+        # 如果DataFrame中有latency_total，将其设置到runner中以便生成报告
+        if 'latency_total' in results_df_a.columns and len(results_df_a['latency_total'].dropna()) > 0:
+            runner_a.total_runtime = results_df_a['latency_total'].iloc[0]
         summary_a = runner_a.generate_report(results_df_a, str(output_dir_a / "evaluation_results_a.html"))
         csv_path_a = output_dir_a / "evaluation_results_a.csv"
         results_df_a.to_csv(csv_path_a, index=False, encoding='utf-8-sig')
@@ -1723,6 +1823,9 @@ if __name__ == "__main__":
         logger.info("=" * 80)
         output_dir_b = ab_test_output_dir / "b"
         runner_b = EvaluationRunner(client, config_b, output_base_dir=output_dir_b)
+        # 如果DataFrame中有latency_total，将其设置到runner中以便生成报告
+        if 'latency_total' in results_df_b.columns and len(results_df_b['latency_total'].dropna()) > 0:
+            runner_b.total_runtime = results_df_b['latency_total'].iloc[0]
         summary_b = runner_b.generate_report(results_df_b, str(output_dir_b / "evaluation_results_b.html"))
         csv_path_b = output_dir_b / "evaluation_results_b.csv"
         results_df_b.to_csv(csv_path_b, index=False, encoding='utf-8-sig')
@@ -1735,10 +1838,30 @@ if __name__ == "__main__":
         print(comparison_df.to_string(index=False))
         print("\nA组总体指标:")
         for metric, value in summary_a.items():
-            print(f"  {metric}: {value:.4f}")
+            if isinstance(value, (int, float)):
+                if metric == 'latency_total':
+                    # 总响应时间显示为2位小数
+                    print(f"  {metric}: {value:.2f}s")
+                elif 'latency' in metric.lower():
+                    # 其他latency相关指标显示为3位小数
+                    print(f"  {metric}: {value:.3f}s")
+                else:
+                    print(f"  {metric}: {value:.4f}")
+            else:
+                print(f"  {metric}: {value}")
         print("\nB组总体指标:")
         for metric, value in summary_b.items():
-            print(f"  {metric}: {value:.4f}")
+            if isinstance(value, (int, float)):
+                if metric == 'latency_total':
+                    # 总响应时间显示为2位小数
+                    print(f"  {metric}: {value:.2f}s")
+                elif 'latency' in metric.lower():
+                    # 其他latency相关指标显示为3位小数
+                    print(f"  {metric}: {value:.3f}s")
+                else:
+                    print(f"  {metric}: {value:.4f}")
+            else:
+                print(f"  {metric}: {value}")
         print("\n改进百分比 (B vs A):")
         for _, row in comparison_df.iterrows():
             improvement = row['Improvement']
@@ -1795,6 +1918,9 @@ if __name__ == "__main__":
         
         # 保存结果到单次测试目录
         csv_path = single_output_dir / "evaluation_results.csv"
+        # 如果记录了实际运行时间，将其添加到DataFrame中（作为元数据，每行相同）
+        if runner.total_runtime is not None:
+            results_df['latency_total'] = runner.total_runtime
         results_df.to_csv(csv_path, index=False, encoding='utf-8-sig')
         logger.info(f"评测结果已保存到: {csv_path}")
         
@@ -1803,4 +1929,14 @@ if __name__ == "__main__":
         print("=" * 80)
         print("\n总体指标:")
         for metric, value in summary.items():
-            print(f"  {metric}: {value:.4f}")
+            if isinstance(value, (int, float)):
+                if metric == 'latency_total':
+                    # 总响应时间显示为2位小数
+                    print(f"  {metric}: {value:.2f}s")
+                elif 'latency' in metric.lower():
+                    # 其他latency相关指标显示为3位小数
+                    print(f"  {metric}: {value:.3f}s")
+                else:
+                    print(f"  {metric}: {value:.4f}")
+            else:
+                print(f"  {metric}: {value}")
