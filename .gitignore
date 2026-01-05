@@ -39,8 +39,16 @@ Thumbs.db
 # API 响应备份（通常在 output 目录下，但单独列出以防万一）
 api_responses/
 
+# 备份目录
+backup/
+
 # 配置文件（包含敏感信息）
 config.py
 *.env
 .env
+
+# 规则配置文件（包含实际产品数据，敏感信息）
+# 注意：模板文件（.example）会提交，但实际数据文件不会
+rules/chapter_identifier_mapping.json
+rules/manual_mapping.json
 

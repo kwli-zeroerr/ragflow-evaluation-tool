@@ -1,0 +1,72 @@
+feat: 添加章节标识符映射系统和交互式维护工具
+
+## 核心功能
+
+### 1. 章节标识符映射系统
+- 新增基于对象字典编号和关键词的精确匹配机制
+- 支持从章节文本中自动提取对象字典编号（如 0x6082）和关键词
+- 提供标识符匹配器，实现高精度的章节映射
+
+### 2. 规则管理系统
+- 新增 RuleManager 统一管理所有规则配置
+- 支持热更新，修改配置文件后自动重新加载
+- 管理多种规则类型：
+  - 章节映射规则（chapter_mapping.json）
+  - 标识符映射规则（chapter_identifier_mapping.json）
+  - 匹配规则（matching_rules.json）
+  - 提取规则（extraction_rules.json）
+  - 手册映射规则（manual_mapping.json）
+
+### 3. 交互式维护工具
+- 新增 tools/mapping_tool.py：章节映射规则维护工具
+- 提供交互式菜单界面，支持：
+  - 自动分析失败案例并生成映射建议
+  - 验证现有映射规则
+  - 查看映射规则统计
+  - 手动添加映射规则
+  - 清理无效映射规则
+- 自动检测测试结果文件和 API 响应目录
+- 支持批量应用高置信度建议
+
+### 4. 核心模块
+- core/chapter_identifier_extractor.py：标识符提取器
+- core/chapter_identifier_matcher.py：标识符匹配器
+- core/rules_manager.py：规则管理器
+- core/chapter_mapper.py：章节映射器（已存在，增强）
+- core/manual_mapper.py：手册映射器（已存在，增强）
+- core/format_extractor.py：格式提取器（已存在，增强）
+
+### 5. 评测工具集成
+- 更新 evaluation_tool.py：集成标识符匹配功能
+- 更新 evaluation_dashboard.py：支持显示标识符匹配结果
+- 更新 architecture_performance_test.py 和 hyperparameter_test.py
+
+### 6. 配置和文档
+- 新增 rules/ 目录：规则配置模板和说明文档
+  - chapter_identifier_mapping.json.example（模板）
+  - manual_mapping.json.example（模板）
+  - README.md（规则配置说明）
+- 更新 README.md：添加维护工具使用说明
+- 更新 config.py.example：配置示例
+- 更新 .gitignore：忽略包含敏感数据的规则文件
+- 新增 requirements.txt：项目依赖列表
+- 新增 提交前检查清单.md：Git 提交安全指南
+- 新增 项目架构分析报告.md：架构分析文档
+
+## 安全措施
+
+- 配置 .gitignore 忽略敏感文件：
+  - rules/chapter_identifier_mapping.json（实际产品数据）
+  - rules/manual_mapping.json（产品手册名称）
+  - config.py（API 密钥等）
+- 提供模板文件（.example）供其他合作者使用
+- 提供详细的设置说明文档
+
+## 技术特性
+
+- 支持多种编码格式的 CSV 文件读取
+- 自动路径检测和文件查找
+- 置信度分级（high/medium/low）的映射建议
+- 支持撤回最近应用的更改
+- 完整的日志记录和错误处理
+

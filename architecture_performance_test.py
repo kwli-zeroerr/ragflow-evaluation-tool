@@ -55,6 +55,10 @@ class ArchitectureConfig:
     api_url: str
     api_key: str
     description: str  # 架构描述，如 "SQLite+本地存储+ES"
+    knowledge_id: Optional[str] = None  # OpenWebUI 知识库ID（可选）
+    use_ragflow_format: bool = False  # 是否使用 RAGflow 格式
+    use_ragflow_index: bool = False  # 是否使用 RAGFlow ES 索引
+    ragflow_timeout: int = 30  # OpenWebUI 接口超时时间
 
 
 @dataclass
@@ -79,8 +83,32 @@ class ArchitecturePerformanceTester:
     def __init__(self, architecture_a: ArchitectureConfig, architecture_b: ArchitectureConfig):
         self.arch_a = architecture_a
         self.arch_b = architecture_b
-        self.client_a = RagFlowClient(architecture_a.api_url, architecture_a.api_key)
-        self.client_b = RagFlowClient(architecture_b.api_url, architecture_b.api_key)
+        
+        # 根据配置创建客户端（支持 OpenWebUI）
+        if architecture_a.knowledge_id:
+            self.client_a = RagFlowClient(
+                architecture_a.api_url,
+                architecture_a.api_key,
+                knowledge_id=architecture_a.knowledge_id,
+                use_ragflow_format=architecture_a.use_ragflow_format,
+                use_ragflow_index=architecture_a.use_ragflow_index,
+                ragflow_timeout=architecture_a.ragflow_timeout
+            )
+        else:
+            self.client_a = RagFlowClient(architecture_a.api_url, architecture_a.api_key)
+        
+        if architecture_b.knowledge_id:
+            self.client_b = RagFlowClient(
+                architecture_b.api_url,
+                architecture_b.api_key,
+                knowledge_id=architecture_b.knowledge_id,
+                use_ragflow_format=architecture_b.use_ragflow_format,
+                use_ragflow_index=architecture_b.use_ragflow_index,
+                ragflow_timeout=architecture_b.ragflow_timeout
+            )
+        else:
+            self.client_b = RagFlowClient(architecture_b.api_url, architecture_b.api_key)
+        
         self.results_lock = Lock()
     
     def run_single_request_test(self, question: str, config: RetrievalConfig, 
@@ -668,8 +696,15 @@ if __name__ == "__main__":
     # 从配置文件加载
     try:
         import config
+        # 架构A：生产环境（可能是 OpenWebUI）
         prod_url = getattr(config, 'PROD_API_URL', '')
         prod_key = getattr(config, 'PROD_API_KEY', '')
+        prod_knowledge_id = getattr(config, 'PROD_KNOWLEDGE_ID', None)
+        use_ragflow_format = getattr(config, 'USE_RAGFLOW_FORMAT', True)
+        use_ragflow_index = getattr(config, 'USE_RAGFLOW_INDEX', True)
+        ragflow_timeout = getattr(config, 'RAGFLOW_TIMEOUT', 30)
+        
+        # 架构B：测试环境（标准 RagFlow API）
         test_url = getattr(config, 'TEST_API_URL', '')
         test_key = getattr(config, 'TEST_API_KEY', '')
     except ImportError:
@@ -678,17 +713,21 @@ if __name__ == "__main__":
     
     # 配置两种架构
     architecture_a = ArchitectureConfig(
-        name="架构A (SQLite+本地存储+ES)",
+        name="架构A (生产环境)",
         api_url=prod_url,
         api_key=prod_key,
-        description="SQLite + 本地存储 + Elasticsearch"
+        description="生产环境" + (" (OpenWebUI RAGFlow)" if prod_knowledge_id else " (标准 RagFlow API)"),
+        knowledge_id=prod_knowledge_id,
+        use_ragflow_format=use_ragflow_format if prod_knowledge_id else False,
+        use_ragflow_index=use_ragflow_index if prod_knowledge_id else False,
+        ragflow_timeout=ragflow_timeout if prod_knowledge_id else 30
     )
     
     architecture_b = ArchitectureConfig(
-        name="架构B (PostgreSQL+MinIO+ES)",
+        name="架构B (测试环境)",
         api_url=test_url,
         api_key=test_key,
-        description="PostgreSQL + MinIO + Elasticsearch"
+        description="测试环境 (标准 RagFlow API)"
     )
     
     logger.info("=" * 80)

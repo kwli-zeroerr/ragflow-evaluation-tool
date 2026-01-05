@@ -1,0 +1,22 @@
+{
+  "version": "1.0",
+  "description": "基于对象字典编号和关键词的章节映射规则",
+  "mappings": {
+    "_comment": "映射规则格式：旧章节编号 -> 新章节编号，基于对象字典编号和关键词进行精确匹配",
+    "_example": {
+      "8.2.98": {
+        "object_dict_id": "0x6082",
+        "keywords": [
+          "结束速度",
+          "End velocity"
+        ],
+        "equivalent_chapters": [
+          "8.2.100"
+        ]
+      }
+    }
+  },
+  "fallback": "keep_original",
+  "_note": "fallback 选项：keep_original（保持原样）或 return_empty（返回空字符串）"
+}
+

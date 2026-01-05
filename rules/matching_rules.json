@@ -1,0 +1,20 @@
+{
+  "version": "1.0",
+  "description": "章节匹配规则配置",
+  "parent_child_rules": {
+    "allow_parent_match_child": true,
+    "allow_child_match_parent": false,
+    "_comment": "allow_parent_match_child: 允许父章节匹配子章节（如 '1' 匹配 '1.1'）"
+  },
+  "chinese_arabic_mapping": {
+    "enabled": true,
+    "custom_mappings": {},
+    "_comment": "自定义中文数字到阿拉伯数字的映射，如 {\"二十七\": 27}"
+  },
+  "normalization_rules": {
+    "remove_english_text": true,
+    "remove_trailing_dots": true,
+    "_comment": "标准化规则：是否移除英文文本和末尾的点"
+  }
+}
+

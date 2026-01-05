@@ -5,22 +5,38 @@ config.py 已被添加到 .gitignore，不会被提交到 GitHub
 """
 
 # RagFlow API 配置
-# 生产环境
+# 生产环境（OpenWebUI RAGFlow 接口）
 PROD_API_URL = "http://your-prod-api-url:port/"
 PROD_API_KEY = "your-production-api-key"
+PROD_KNOWLEDGE_ID = "your-knowledge-id"  # OpenWebUI 知识库ID
 
-# 测试环境
+# 测试环境（标准 RagFlow API）
 TEST_API_URL = "http://your-test-api-url:port/"
 TEST_API_KEY = "your-test-api-key"
 
+# 开发环境（标准 RagFlow API）
+DEV_API_URL = "http://your-dev-api-url:port/"
+DEV_API_KEY = "your-dev-api-key"
+
+# OpenWebUI RAGFlow 相关配置（仅生产环境使用）
+USE_RAGFLOW_FORMAT = True   # 是否使用 RAGflow 格式返回
+USE_RAGFLOW_INDEX = True    # 是否使用 RAGFlow ES 索引
+RAGFLOW_TIMEOUT = 30        # OpenWebUI 接口超时时间（秒）
+
 # 默认使用哪个环境
-DEFAULT_ENV = "test"  # 可选: "prod" 或 "test"
+DEFAULT_ENV = "test"  # 可选: "prod"、"test" 或 "dev"
 
 # ========== 并发执行配置 ==========
-# 并发线程数，设置为1表示顺序执行（单线程），大于1表示并发执行
+# 是否启用并发执行
+# True: 启用并发执行（使用 MAX_WORKERS 个线程）
+# False: 禁用并发，使用顺序执行（单线程）
+ENABLE_CONCURRENCY = True  # 默认值：True（启用并发）
+
+# 并发线程数，仅在 ENABLE_CONCURRENCY=True 时生效
+# 设置为1表示顺序执行（单线程），大于1表示并发执行
 # 建议值：根据API服务器的处理能力和限流策略设置，通常设置为 3-10
 # 注意：并发数过高可能导致API限流或服务器压力过大
-MAX_WORKERS = 5  # 默认值：1（顺序执行），建议值：3-10
+MAX_WORKERS = 5  # 默认值：5，建议值：3-10
 
 # 每个请求之间的延迟（秒），用于避免API限流
 # 在并发模式下，每个线程会独立应用此延迟
@@ -56,4 +72,17 @@ RETRIEVAL_CONFIG = {
     "page": 1,  # API默认值
     "page_size": 30  # API默认值
 }
+
+# ========== 测试用例限制配置 ==========
+# 限制测试用例数量，设置为 None 或 0 表示使用所有测试用例
+# 设置为正整数表示只使用前N个测试用例
+MAX_TEST_CASES = None  # 例如: 1000 或 None（使用全部）
+
+# ========== 测试用例范围配置 ==========
+# 指定测试用例的索引范围，用于只测试部分用例
+# 格式：(起始索引, 结束索引)，索引从1开始（对应Excel中的行号）
+# 设置为 None 表示使用所有测试用例
+# 例如：(626, 1000) 表示只测试索引626到1000的用例
+# 注意：此配置会覆盖 MAX_TEST_CASES 的设置
+TEST_CASE_RANGE = None  # 例如: (626, 1000) 或 None（使用全部）
 

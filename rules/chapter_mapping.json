@@ -1,0 +1,19 @@
+{
+  "version": "1.0",
+  "description": "文档分段调整后的章节映射关系（旧章节 → 新章节）",
+  "mappings": {
+    "_comment": "等待用户提供具体的章节映射数据，格式：\"旧章节\": \"新章节\""
+  },
+  "reverse_mapping": {
+    "_comment": "反向映射（新章节 → 旧章节），可选配置。如果不配置，系统会自动从 mappings 中推导",
+    "_example": {
+      "2.1": "1.1",
+      "2.2": "1.2"
+    }
+  },
+  "auto_detect": true,
+  "_comment_auto_detect": "是否启用自动格式识别。如果为 true，系统会尝试自动识别章节格式（旧格式/新格式）",
+  "fallback": "keep_original",
+  "_note": "fallback 选项：keep_original（保持原样）或 return_empty（返回空字符串）"
+}
+

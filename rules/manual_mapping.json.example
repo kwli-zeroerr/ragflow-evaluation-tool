@@ -1,0 +1,36 @@
+{
+  "version": "1.0",
+  "description": "手册名称、版本、格式映射配置",
+  "mappings": {
+    "_comment": "手册映射规则格式：旧手册名 -> 新手册信息",
+    "_example": {
+      "旧手册名.md": {
+        "new_name": "新手册名.docx",
+        "version": "v2.0",
+        "format": "docx",
+        "aliases": [
+          "旧手册名",
+          "Old Manual Name",
+          "新手册名",
+          "New Manual Name"
+        ]
+      }
+    }
+  },
+  "reverse_mapping": {
+    "_comment": "反向映射（新手册名 → 旧手册名），可选配置。如果不配置，系统会自动从 mappings 中推导",
+    "_example": {
+      "新手册名.docx": "旧手册名.md"
+    }
+  },
+  "auto_detect": true,
+  "_comment_auto_detect": "是否启用自动格式识别。如果为 true，系统会尝试自动识别手册格式（旧格式/新格式）",
+  "format_patterns": {
+    "markdown": "\\.md$",
+    "docx": "\\.docx$",
+    "_comment": "用于识别手册格式的正则表达式模式"
+  },
+  "fallback": "keep_original",
+  "_note": "fallback 选项：keep_original（保持原样）或 return_empty（返回空字符串）"
+}
+

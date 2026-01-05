@@ -178,7 +178,6 @@ class HyperparameterTester:
         metrics = {
             'parameter_name': param_name,
             'parameter_value': param_value,
-            'accuracy': results_df['accuracy'].mean() if 'accuracy' in results_df.columns else 0.0,
             'recall': results_df['recall'].mean() if 'recall' in results_df.columns else 0.0,
             'recall@3': results_df['recall@3'].mean() if 'recall@3' in results_df.columns else 0.0,
             'recall@5': results_df['recall@5'].mean() if 'recall@5' in results_df.columns else 0.0,
@@ -192,7 +191,7 @@ class HyperparameterTester:
         results_df.to_csv(csv_path, index=False, encoding='utf-8-sig')
         
         print(f"{param_prefix} 结果已保存: {csv_path}")
-        print(f"{param_prefix} 指标: accuracy={metrics['accuracy']:.4f}, recall={metrics['recall']:.4f}, recall@10={metrics['recall@10']:.4f}")
+        print(f"{param_prefix} 指标: recall={metrics['recall']:.4f}, recall@10={metrics['recall@10']:.4f}")
         print(f"{param_prefix} {'='*80}\n")
         
         return metrics
@@ -273,10 +272,10 @@ class HyperparameterTester:
         
         # 准备数据
         param_values = results_df['parameter_value'].values
-        metrics = ['accuracy', 'recall', 'recall@3', 'recall@5', 'recall@10']
+        metrics = ['recall', 'recall@3', 'recall@5', 'recall@10']
         
-        # 创建图表 - 2行3列，只显示5个指标（不包含延迟）
-        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+        # 创建图表 - 2行2列，只显示4个指标（不包含延迟）
+        fig, axes = plt.subplots(2, 2, figsize=(14, 12))
         fig.suptitle(f'超参数测试结果对比（忽略延迟）: {param_name}', fontsize=16, fontweight='bold')
         
         # 绘制各个指标
@@ -326,17 +325,8 @@ class HyperparameterTester:
                        arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0.2', lw=2),
                        fontsize=10, fontweight='bold')
         
-        # 第6个子图：显示差异对比（最大值-最小值）
-        ax_diff = axes_flat[5]
-        differences = []
-        diff_labels = []
-        for metric in metrics:
-            values = results_df[metric].values
-            diff = values.max() - values.min()
-            differences.append(diff)
-            diff_labels.append(metric.upper())
-        
-        bars = ax_diff.barh(diff_labels, differences, color=['#2E86AB', '#A23B72', '#F18F01', '#C73E1D', '#6A994E'])
+        # 差异对比图（如果还有空间，可以添加）
+        # 由于只有4个指标，不再单独显示差异对比图
         ax_diff.set_xlabel('差异范围 (最大值 - 最小值)', fontsize=12, fontweight='bold')
         ax_diff.set_title('各指标在不同参数值下的差异范围', fontsize=13, fontweight='bold')
         ax_diff.grid(True, alpha=0.3, linestyle='--', axis='x')
@@ -364,9 +354,9 @@ class HyperparameterTester:
         fig, ax = plt.subplots(figsize=(16, 10))
         
         # 准备数据
-        metrics = ['accuracy', 'recall', 'recall@3', 'recall@5', 'recall@10']
-        colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D', '#6A994E']
-        line_styles = ['-', '--', '-.', ':', '-']
+        metrics = ['recall', 'recall@3', 'recall@5', 'recall@10']
+        colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D']
+        line_styles = ['-', '--', '-.', ':']
         
         # 绘制多条线，使用不同的线型和颜色
         for metric, color, linestyle in zip(metrics, colors, line_styles):
@@ -475,20 +465,8 @@ def main():
     """主函数"""
     # 加载配置
     try:
-        import config
-        env = getattr(config, 'DEFAULT_ENV', 'test').lower()
-        
-        if env == 'prod':
-            api_url = getattr(config, 'PROD_API_URL', '')
-            api_key = getattr(config, 'PROD_API_KEY', '')
-        else:
-            api_url = getattr(config, 'TEST_API_URL', '')
-            api_key = getattr(config, 'TEST_API_KEY', '')
-        
-        if not api_url or not api_key:
-            raise ValueError("配置文件中的 API URL 或 API Key 为空")
-        
-        client = RagFlowClient(api_url=api_url, api_key=api_key)
+        from evaluation_tool import create_client_from_config
+        client = create_client_from_config()
     except Exception as e:
         print(f"加载配置失败: {str(e)}")
         sys.exit(1)

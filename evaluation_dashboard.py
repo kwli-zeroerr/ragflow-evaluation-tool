@@ -19,7 +19,6 @@ class EvaluationDashboard:
     
     # 指标名称中文映射
     METRIC_NAMES_CN = {
-        'accuracy': '准确率',
         'recall': '召回率',
         'recall@3': '召回率@3',
         'recall@5': '召回率@5',
@@ -52,7 +51,7 @@ class EvaluationDashboard:
         # metric_columns用于指标统计，排除latency（latency单独统计）
         self.metric_columns = [
             col for col in self.df.columns 
-            if '@' in col or col in ['accuracy', 'recall']
+            if '@' in col or col in ['recall']
         ]
     
     def _translate_metric_name(self, metric_name: str) -> str:
@@ -253,7 +252,7 @@ class EvaluationDashboard:
         # 选择要显示的列
         display_columns = [
             'question', 'answer', 'reference', 'type', 'theme',
-            'accuracy', 'recall', 'recall@3', 'recall@5', 'recall@10', 'latency'
+            'recall', 'recall@3', 'recall@5', 'recall@10', 'latency'
         ]
         
         # 只保留存在的列
